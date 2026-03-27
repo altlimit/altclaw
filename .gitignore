@@ -1,0 +1,8 @@
+.env
+/.altclaw
+/build
+/.workspace
+/tmp
+/altclaw
+/cmd/altclaw/altclaw
+altclaw.exe

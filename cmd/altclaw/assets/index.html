@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#050505;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:0}
+.center{position:fixed;top:0;left:0;width:100vw;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1}
+.logo{width:120px;height:120px;filter:drop-shadow(0 0 40px rgba(245,158,11,0.4));animation:float 4s ease-in-out infinite}
+.status{margin-top:32px;color:#a1a1aa;font-size:15px;letter-spacing:0.04em;animation:pulse 2s ease-in-out infinite}
+.dots::after{content:'';animation:dots 1.5s steps(4,end) infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+@keyframes pulse{0%,100%{opacity:.6}50%{opacity:1}}
+@keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="center">
+  <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+    <defs>
+      <linearGradient id="blueGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#5BC0EB"/><stop offset="20%" stop-color="#2da1d7"/><stop offset="100%" stop-color="#165b7e"/></linearGradient>
+      <linearGradient id="redGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#E37A71"/><stop offset="20%" stop-color="#cc554c"/><stop offset="100%" stop-color="#7c2d28"/></linearGradient>
+      <linearGradient id="yellowGrad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#FFF2CC"/><stop offset="50%" stop-color="#F1D882"/><stop offset="100%" stop-color="#cc9900"/></linearGradient>
+      <linearGradient id="slashGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="#FFF2CC"/><stop offset="100%" stop-color="#F59E0B"/></linearGradient>
+      <filter id="coreDrop" x="-50%" y="-50%" width="200%" height="200%"><feDropShadow dx="0" dy="16" stdDeviation="16" flood-color="#000" flood-opacity="0.4"/></filter>
+    </defs>
+    <g transform="matrix(0.866,0.5,0,1,89.73,160)"><g fill="#000" opacity="0.3"><rect x="16" y="168" width="40" height="8" rx="4"/><rect x="76" y="168" width="40" height="8" rx="4"/><rect x="136" y="168" width="40" height="8" rx="4"/></g><rect x="16" y="48" width="40" height="128" rx="8" fill="url(#blueGrad)"/><rect x="76" y="32" width="40" height="144" rx="8" fill="url(#blueGrad)"/><rect x="136" y="16" width="40" height="160" rx="8" fill="url(#blueGrad)"/><g fill="#FFF" opacity="0.3"><rect x="16" y="48" width="40" height="4" rx="2"/><rect x="76" y="32" width="40" height="4" rx="2"/><rect x="136" y="16" width="40" height="4" rx="2"/></g></g>
+    <g transform="matrix(0.866,-0.5,0,1,256,256)"><g fill="#000" opacity="0.3"><rect x="16" y="168" width="40" height="8" rx="4"/><rect x="76" y="168" width="40" height="8" rx="4"/><rect x="136" y="168" width="40" height="8" rx="4"/></g><rect x="16" y="16" width="40" height="160" rx="8" fill="url(#redGrad)"/><rect x="76" y="32" width="40" height="144" rx="8" fill="url(#redGrad)"/><rect x="136" y="48" width="40" height="128" rx="8" fill="url(#redGrad)"/><g fill="#FFF" opacity="0.3"><rect x="16" y="16" width="40" height="4" rx="2"/><rect x="76" y="32" width="40" height="4" rx="2"/><rect x="136" y="48" width="40" height="4" rx="2"/></g></g>
+    <g filter="url(#coreDrop)"><g transform="matrix(0.866,0.5,-0.866,0.5,256,64)"><rect x="16" y="16" width="160" height="160" rx="24" fill="url(#yellowGrad)"/><rect x="48" y="48" width="96" height="96" rx="24" fill="#1A1A1A" stroke="#FFF" stroke-opacity="0.2" stroke-width="4"/><g stroke="url(#slashGrad)" stroke-width="12" stroke-linecap="round"><line x1="68" y1="68" x2="84" y2="124"/><line x1="96" y1="64" x2="96" y2="128"/><line x1="124" y1="68" x2="108" y2="124"/></g></g></g>
+  </svg>
+  <p class="status" id="status">Starting<span class="dots"></span></p>
+</div>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d');
+let W,H,particles=[];
+function resize(){W=c.width=innerWidth;H=c.height=innerHeight}
+resize();addEventListener('resize',resize);
+class P{
+  constructor(){this.reset()}
+  reset(){this.x=Math.random()*W;this.y=Math.random()*H;this.r=Math.random()*1.5+0.5;this.vx=(Math.random()-0.5)*0.3;this.vy=(Math.random()-0.5)*0.3;this.a=Math.random()*0.4+0.1}
+  update(){this.x+=this.vx;this.y+=this.vy;if(this.x<0||this.x>W)this.vx*=-1;if(this.y<0||this.y>H)this.vy*=-1}
+  draw(){x.beginPath();x.arc(this.x,this.y,this.r,0,Math.PI*2);x.fillStyle=`rgba(245,158,11,${this.a})`;x.fill()}
+}
+for(let i=0;i<60;i++)particles.push(new P);
+function loop(){
+  x.clearRect(0,0,W,H);
+  // radial gradient bg
+  const g=x.createRadialGradient(W/2,H,0,W/2,H,Math.max(W,H));
+  g.addColorStop(0,'#1b0a00');g.addColorStop(1,'#050505');
+  x.fillStyle=g;x.fillRect(0,0,W,H);
+  particles.forEach(p=>{p.update();p.draw()});
+  // draw lines between close particles
+  for(let i=0;i<particles.length;i++)for(let j=i+1;j<particles.length;j++){
+    const dx=particles[i].x-particles[j].x,dy=particles[i].y-particles[j].y,d=Math.sqrt(dx*dx+dy*dy);
+    if(d<150){x.beginPath();x.moveTo(particles[i].x,particles[i].y);x.lineTo(particles[j].x,particles[j].y);x.strokeStyle=`rgba(245,158,11,${0.08*(1-d/150)})`;x.stroke()}
+  }
+  requestAnimationFrame(loop)
+}
+loop();
+</script>
+</body>
+</html>
