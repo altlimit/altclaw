@@ -41,6 +41,9 @@ async function registerPasskey() {
   registering.value = true
   status.value = { msg: '', type: '' }
   try {
+    if (!navigator.credentials || !navigator.credentials.create) {
+      throw new Error('WebAuthn is not available — passkeys require HTTPS or localhost')
+    }
     // 1. Begin registration
     const beginResp = await fetch('/api/passkey-register-begin', { method: 'POST' })
     if (!beginResp.ok) throw new Error(await beginResp.text())

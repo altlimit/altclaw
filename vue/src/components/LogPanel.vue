@@ -13,12 +13,12 @@ const loading = ref(false)
 const error = ref('')
 const searchQuery = ref('')
 const activeLevels = ref<Set<string>>(new Set(['DEBUG', 'INFO', 'WARN', 'ERROR']))
-const autoRefresh = ref(true)
+const autoRefresh = ref(false)
 const expandedIdx = ref<Set<number>>(new Set())
 const listEl = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
 
-let pollTimer: ReturnType<typeof setInterval> | null = null
+let pollTimer: ReturnType<typeof setTimeout> | null = null
 
 const allLevels = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const
 
@@ -44,6 +44,13 @@ async function fetchLogs() {
     error.value = e.message
   } finally {
     loading.value = false
+    schedulePoll()
+  }
+}
+
+function schedulePoll() {
+  if (autoRefresh.value) {
+    pollTimer = setTimeout(fetchLogs, 5000)
   }
 }
 
@@ -109,12 +116,11 @@ const filteredEntries = computed(() => entries.value)
 function startPolling() {
   stopPolling()
   fetchLogs()
-  pollTimer = setInterval(fetchLogs, 3000)
 }
 
 function stopPolling() {
   if (pollTimer) {
-    clearInterval(pollTimer)
+    clearTimeout(pollTimer)
     pollTimer = null
   }
 }
@@ -130,7 +136,7 @@ watch([activeLevels, searchQuery], () => {
 }, { deep: true })
 
 onMounted(() => {
-  if (autoRefresh.value) startPolling()
+  fetchLogs()
 })
 
 onUnmounted(() => {

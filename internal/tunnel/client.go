@@ -107,8 +107,8 @@ func (c *Client) Connect(ctx context.Context) (string, error) {
 	// Establish yamux session (altclaw acts as yamux Server — accepts streams opened by hub)
 	cfg := yamux.DefaultConfig()
 	cfg.EnableKeepAlive = true
-	cfg.KeepAliveInterval = 15 * time.Second
-	cfg.ConnectionWriteTimeout = 10 * time.Second
+	cfg.KeepAliveInterval = 30 * time.Second
+	cfg.ConnectionWriteTimeout = 30 * time.Second
 	cfg.StreamOpenTimeout = 10 * time.Second
 	cfg.LogOutput = io.Discard
 

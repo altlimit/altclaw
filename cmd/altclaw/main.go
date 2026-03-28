@@ -693,10 +693,11 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	p := tea.NewProgram(sm)
 	sm.program = p
 
-	// Redirect slog to the TUI log panel
-	slog.SetDefault(slog.New(slog.NewTextHandler(
+	// Redirect slog to the TUI log panel while keeping logBuf fed
+	tuiHandler := slog.NewTextHandler(
 		&tuiLogWriter{model: sm}, &slog.HandlerOptions{Level: slog.LevelInfo},
-	)))
+	)
+	slog.SetDefault(slog.New(config.NewMultiHandler(tuiHandler, logBuf)))
 
 	// Start server in background
 	go func() {

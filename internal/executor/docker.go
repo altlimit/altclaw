@@ -29,15 +29,18 @@ import (
 // up on startup.
 type Docker struct {
 	Image        string
-	Workspace    string    // host path to mount into container
-	MountPath    string    // path inside container (default: /workspace)
-	cli          string    // container runtime CLI binary ("docker" or "podman")
-	prefix       string    // container name prefix, derived from workspace
-	networkName  string    // dedicated internal network for this executor instance
-	proxyRelay   string    // container ID of the proxy relay sidecar
-	proxyRelayIP string    // IP of the relay container on the internal network
-	allowedPorts []string  // host ports squid should allow through (e.g. the altclaw server port)
-	infraOnce    sync.Once // ensures network/relay are created once
+	Workspace    string     // host path to mount into container
+	MountPath    string     // path inside container (default: /workspace)
+	cli          string     // container runtime CLI binary ("docker" or "podman")
+	prefix       string     // container name prefix, derived from workspace
+	networkName  string     // dedicated internal network for this executor instance
+	proxyRelay   string     // container ID of the proxy relay sidecar
+	proxyRelayIP string     // IP of the relay container on the internal network
+	allowedPorts []string   // host ports the proxy should allow through (e.g. the altclaw server port)
+	infraReady   bool       // true once network + relay are up
+	infraErr     error      // cached error from last infra attempt
+	infraRetries int        // number of infra retry attempts
+	infraMu      sync.Mutex // guards infra setup (separate from mu to avoid deadlock)
 
 	mu               sync.Mutex
 	defaultContainer string                           // main agent's container
@@ -73,7 +76,9 @@ func qualifyImage(image string) string {
 }
 
 // containerPrefix returns a deterministic prefix from the workspace path.
-// Example: /home/user/projects/myapp → "altclaw-myapp"
+// Includes a short hash of the full path to avoid collisions when multiple
+// instances use workspaces with the same basename.
+// Example: /home/user/projects/myapp → "altclaw-myapp-a1b2c3d4"
 func containerPrefix(workspace string) string {
 	base := filepath.Base(workspace)
 	if base == "" || base == "." || base == "/" {
@@ -84,7 +89,8 @@ func containerPrefix(workspace string) string {
 	if clean == "" {
 		clean = "default"
 	}
-	return "altclaw-" + clean
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(workspace)))[:8]
+	return "altclaw-" + clean + "-" + hash
 }
 
 // NewDocker creates a Docker/Podman executor with the given image and workspace mount.
@@ -120,27 +126,43 @@ func NewDocker(cli, image, workspace, mountPath string) (*Docker, error) {
 	return d, nil
 }
 
-// ensureInfra lazily creates the internal network and squid proxy relay
-// container on first use. Thread-safe via sync.Once.
+// ensureInfra lazily creates the internal network and SSRF proxy relay
+// container on first use. Thread-safe via mutex. Retries if a previous
+// attempt failed.
 func (d *Docker) ensureInfra() error {
-	var initErr error
-	d.infraOnce.Do(func() {
-		d.networkName = fmt.Sprintf("%s-net", d.prefix)
+	d.infraMu.Lock()
+	defer d.infraMu.Unlock()
 
-		// Setup isolated internal network
-		if err := d.setupNetwork(); err != nil {
-			initErr = err
-			return
+	if d.infraReady {
+		return nil
+	}
+	if d.infraErr != nil {
+		// Previous attempt failed — retry (max 3 total)
+		d.infraRetries++
+		if d.infraRetries > 3 {
+			return d.infraErr
 		}
+		slog.Info("retrying docker infra setup after previous failure", "attempt", d.infraRetries, "error", d.infraErr)
+		d.infraErr = nil
+	}
 
-		// Start squid proxy relay sidecar
-		if err := d.startProxyRelay(); err != nil {
-			_ = exec.Command(d.cli, "network", "rm", d.networkName).Run()
-			initErr = err
-			return
-		}
-	})
-	return initErr
+	d.networkName = fmt.Sprintf("%s-net", d.prefix)
+
+	// Setup isolated internal network
+	if err := d.setupNetwork(); err != nil {
+		d.infraErr = err
+		return err
+	}
+
+	// Start SSRF proxy relay sidecar
+	if err := d.startProxyRelay(); err != nil {
+		_ = exec.Command(d.cli, "network", "rm", d.networkName).Run()
+		d.infraErr = err
+		return err
+	}
+
+	d.infraReady = true
+	return nil
 }
 
 // setupNetwork creates an --internal Docker network.
@@ -158,56 +180,36 @@ func (d *Docker) setupNetwork() error {
 	return nil
 }
 
-// buildSquidConf returns a squid.conf string with SSRF-protective ACLs.
-// allowedPorts contains host ports that should bypass the private-IP block
-// (e.g. the altclaw web server port on the bridge gateway).
-func (d *Docker) buildSquidConf() string {
-	var sb strings.Builder
-	sb.WriteString("http_port 3128\n")
-	sb.WriteString("# Allow only safe ports\n")
-	sb.WriteString("acl safe_ports port 80 443 8080 8443")
-
-	// Add any explicitly allowed host ports to the safe_ports ACL
-	d.mu.Lock()
-	ports := append([]string(nil), d.allowedPorts...)
-	d.mu.Unlock()
-	for _, p := range ports {
-		sb.WriteString(" " + p)
-	}
-	sb.WriteString("\nhttp_access deny !safe_ports\n")
-
-	// Allow connections to the host bridge gateway on whitelisted ports.
-	// These rules MUST come before the private-network deny rules.
-	if len(ports) > 0 {
-		hostIP := d.getHostIP()
-		sb.WriteString("# Allow host (altclaw server) on whitelisted ports\n")
-		sb.WriteString("acl altclaw_host dst " + hostIP + "\n")
-		sb.WriteString("acl altclaw_ports port")
-		for _, p := range ports {
-			sb.WriteString(" " + p)
-		}
-		sb.WriteString("\nhttp_access allow altclaw_host altclaw_ports\n")
+// ensureProxyImage builds the Go-based SSRF proxy image from the embedded
+// buildpack if it doesn't already exist. Tagged by content hash so it's
+// only rebuilt when the Dockerfile changes.
+func (d *Docker) ensureProxyImage() (string, error) {
+	data, ok := GetBuildpack("proxy.Dockerfile")
+	if !ok {
+		return "", fmt.Errorf("proxy.Dockerfile buildpack not found")
 	}
 
-	sb.WriteString("# Block private/loopback/cloud metadata IPs (SSRF protection)\n")
-	sb.WriteString("acl loopback dst 127.0.0.0/8\n")
-	sb.WriteString("acl private dst 10.0.0.0/8\n")
-	sb.WriteString("acl private dst 172.16.0.0/12\n")
-	sb.WriteString("acl private dst 192.168.0.0/16\n")
-	sb.WriteString("acl link_local dst 169.254.0.0/16\n")
-	sb.WriteString("acl metadata dst 169.254.169.254/32\n")
-	sb.WriteString("http_access deny loopback\n")
-	sb.WriteString("http_access deny private\n")
-	sb.WriteString("http_access deny link_local\n")
-	sb.WriteString("http_access deny metadata\n")
-	sb.WriteString("http_access allow all\n")
-	sb.WriteString("cache deny all\n")
-	sb.WriteString("access_log none\n")
-	sb.WriteString("cache_log /dev/null\n")
-	return sb.String()
+	hash := fmt.Sprintf("%x", sha256.Sum256(data))[:12]
+	tag := "altclaw/proxy:" + hash
+
+	// Check if already built
+	if err := exec.Command(d.cli, "image", "inspect", tag).Run(); err == nil {
+		return tag, nil
+	}
+
+	slog.Info("building SSRF proxy image (first time only)", "tag", tag)
+	cmd := exec.Command(d.cli, "build", "-t", tag, "-")
+	cmd.Stdin = bytes.NewReader(data)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("docker build proxy: %s: %w", stderr.String(), err)
+	}
+	slog.Info("proxy image built", "tag", tag)
+	return tag, nil
 }
 
-// AllowPort whitelists a host port in the squid proxy relay so that app
+// AllowPort whitelists a host port in the proxy relay so that app
 // containers can reach the altclaw server on that port.
 // If the relay is already running, it restarts with the updated config.
 func (d *Docker) AllowPort(port string) {
@@ -224,47 +226,71 @@ func (d *Docker) AllowPort(port string) {
 
 	if relayRunning {
 		// Restart relay with updated config
-		slog.Debug("restarting squid relay for new allowed port", "port", port)
+		slog.Debug("restarting proxy relay for new allowed port", "port", port)
+
 		if err := d.startProxyRelay(); err != nil {
 			slog.Warn("failed to restart proxy relay after AllowPort", "port", port, "err", err)
 		}
 	}
 }
 
-// startProxyRelay runs a squid HTTP proxy container as the relay sidecar.
-// Squid enforces SSRF rules via ACLs (blocks private/loopback/metadata IPs).
+// startProxyRelay runs a Go-based SSRF proxy container as the relay sidecar.
+// The proxy blocks connections to private/loopback/metadata IPs.
 // The container is connected to BOTH the internal network (so app containers
 // can use it as a proxy) and the bridge network (for internet access via Docker NAT).
-// This design works on WSL2 where the host Go process cannot make outbound
-// internet connections directly — outbound connections happen inside the container.
 func (d *Docker) startProxyRelay() error {
 	relayName := d.prefix + "-relay"
 
 	// Clean up any stale relay container
 	_ = exec.Command(d.cli, "rm", "-f", "-v", relayName).Run()
 
-	squidConf := d.buildSquidConf()
+	// Build the Go-based SSRF proxy image (cached by content hash)
+	proxyImage, err := d.ensureProxyImage()
+	if err != nil {
+		return fmt.Errorf("failed to build proxy image: %w", err)
+	}
+
+	// Pass allowed host ports via env var for SSRF whitelist
+	d.mu.Lock()
+	ports := append([]string(nil), d.allowedPorts...)
+	d.mu.Unlock()
+	allowedPorts := strings.Join(ports, ",")
 
 	var stdout bytes.Buffer
-	cmd := exec.Command(d.cli, "run", "-d",
+	args := []string{"run", "-d",
 		"--restart=no",
 		"--name", relayName,
 		"--network", "bridge",
-		"-e", "SQUID_CONF="+squidConf,
-		"--entrypoint", "sh",
-		"docker.io/ubuntu/squid",
-		"-c", `echo "$SQUID_CONF" > /etc/squid/squid.conf && squid -N -f /etc/squid/squid.conf`,
-	)
+	}
+	if allowedPorts != "" {
+		args = append(args, "-e", "ALLOWED_PORTS="+allowedPorts)
+	}
+	args = append(args, proxyImage)
+	cmd := exec.Command(d.cli, args...)
 	cmd.Stdout = &stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to start squid relay: %s", stderr.String())
+		return fmt.Errorf("failed to start proxy relay: %s", stderr.String())
 	}
 	d.proxyRelay = strings.TrimSpace(stdout.String())
 
-	// Give squid a moment to start
-	time.Sleep(2 * time.Second)
+	// Go proxy starts in milliseconds
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify the relay container is still running
+	var stateOut bytes.Buffer
+	stateCmd := exec.Command(d.cli, "inspect", "-f", "{{.State.Running}}", relayName)
+	stateCmd.Stdout = &stateOut
+	if err := stateCmd.Run(); err == nil && strings.TrimSpace(stateOut.String()) != "true" {
+		var logsOut bytes.Buffer
+		logsCmd := exec.Command(d.cli, "logs", "--tail", "20", relayName)
+		logsCmd.Stdout = &logsOut
+		logsCmd.Stderr = &logsOut
+		_ = logsCmd.Run()
+		d.stopContainer(d.proxyRelay)
+		return fmt.Errorf("proxy relay container exited unexpectedly: %s", strings.TrimSpace(logsOut.String()))
+	}
 
 	// Connect the relay container to the internal network
 	connCmd := exec.Command(d.cli, "network", "connect", d.networkName, relayName)
@@ -275,55 +301,76 @@ func (d *Docker) startProxyRelay() error {
 		return fmt.Errorf("failed to connect relay to internal network: %s", connErr.String())
 	}
 
-	// Get the relay container's IP on the internal network
-	var ipOut bytes.Buffer
-	ipCmd := exec.Command(d.cli, "inspect", "-f",
-		fmt.Sprintf(`{{(index .NetworkSettings.Networks "%s").IPAddress}}`, d.networkName),
-		relayName,
-	)
-	ipCmd.Stdout = &ipOut
-	if err := ipCmd.Run(); err != nil {
-		d.stopContainer(d.proxyRelay)
-		return fmt.Errorf("failed to get relay IP: %w", err)
+	// Get the relay container's IP on the internal network.
+	// Use `network inspect` (more reliable than container inspect on some Docker configs).
+	var relayIP string
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Second)
+		}
+		ip, err := d.getContainerIPOnNetwork(d.networkName, relayName)
+		if err != nil {
+			slog.Warn("relay IP lookup failed", "attempt", attempt+1, "error", err)
+			continue
+		}
+		if ip != "" {
+			relayIP = ip
+			break
+		}
+		slog.Warn("relay IP empty, retrying", "attempt", attempt+1)
 	}
-	d.proxyRelayIP = strings.TrimSpace(ipOut.String())
-	if d.proxyRelayIP == "" {
+
+	if relayIP == "" {
 		d.stopContainer(d.proxyRelay)
-		return fmt.Errorf("relay container has no IP on internal network")
+		return fmt.Errorf("relay container has no IP on internal network %s", d.networkName)
 	}
+	d.proxyRelayIP = relayIP
+	slog.Info("relay proxy ready", "ip", relayIP, "network", d.networkName)
 
 	return nil
 }
 
-// getHostIP returns the host IP as seen from the default bridge network.
-func (d *Docker) getHostIP() string {
+// getContainerIPOnNetwork queries the network to find a container's IP.
+// This is more reliable than inspecting the container's NetworkSettings
+// which can be empty on some Docker configurations.
+func (d *Docker) getContainerIPOnNetwork(network, containerName string) (string, error) {
+	// Method 1: network inspect with JSON
 	var stdout bytes.Buffer
-	cmd := exec.Command(d.cli, "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}")
+	cmd := exec.Command(d.cli, "network", "inspect", network, "--format",
+		`{{range $id, $c := .Containers}}{{$c.Name}}={{$c.IPv4Address}} {{end}}`)
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
-		return "172.17.0.1"
+		return "", fmt.Errorf("network inspect: %w", err)
 	}
-	ip := strings.TrimSpace(stdout.String())
-	if ip == "" {
-		return "172.17.0.1"
-	}
-	return ip
-}
 
-// getGatewayIP gets the gateway IP of the created network
-func (d *Docker) getGatewayIP() string {
-	var stdout bytes.Buffer
-	cmd := exec.Command(d.cli, "network", "inspect", d.networkName, "-f", "{{(index .IPAM.Config 0).Gateway}}")
-	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		// Fallback to default bridge gateway if something fails
-		return "172.17.0.1"
+	// Parse "name=172.18.0.2/16 name2=172.18.0.3/16"
+	for _, entry := range strings.Fields(stdout.String()) {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) == 2 && parts[0] == containerName {
+			ip := parts[1]
+			// Strip CIDR suffix (e.g. "172.18.0.2/16" → "172.18.0.2")
+			if idx := strings.Index(ip, "/"); idx > 0 {
+				ip = ip[:idx]
+			}
+			return ip, nil
+		}
 	}
-	ip := strings.TrimSpace(stdout.String())
-	if ip == "" {
-		return "172.17.0.1"
+
+	// Method 2: fallback to container inspect
+	var ipOut bytes.Buffer
+	ipCmd := exec.Command(d.cli, "inspect", "-f",
+		fmt.Sprintf(`{{(index .NetworkSettings.Networks "%s").IPAddress}}`, network),
+		containerName,
+	)
+	ipCmd.Stdout = &ipOut
+	if err := ipCmd.Run(); err != nil {
+		return "", fmt.Errorf("container inspect: %w", err)
 	}
-	return ip
+	ip := strings.TrimSpace(ipOut.String())
+	if ip == "<no value>" {
+		ip = ""
+	}
+	return ip, nil
 }
 
 // cleanupStale removes any Docker containers with our naming prefix
@@ -385,7 +432,13 @@ func (d *Docker) spawnContainer(ctx context.Context, image string) (string, erro
 	args = append(args, "-w", d.MountPath, image, "sleep", "infinity")
 	cmd := exec.CommandContext(ctx, d.cli, args...)
 	cmd.Stdout = &stdout
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return "", fmt.Errorf("docker run (%s): %s: %w", image, detail, err)
+		}
 		return "", fmt.Errorf("docker run (%s): %w", image, err)
 	}
 	return strings.TrimSpace(stdout.String()), nil
@@ -552,8 +605,8 @@ func (d *Docker) Terminate(handleID string) error {
 
 // Cleanup stops and removes all containers (default + sessions).
 func (d *Docker) Cleanup() error {
+	slog.Debug("docker executor cleanup starting")
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	// Kill popen'd processes
 	for id, pp := range d.popened {
@@ -586,6 +639,14 @@ func (d *Docker) Cleanup() error {
 		_ = exec.Command(d.cli, "network", "rm", d.networkName).Run()
 	}
 
+	d.infraReady = false
+	d.mu.Unlock()
+
+	// Belt-and-suspenders: also clean by prefix in case any containers
+	// were missed (e.g. created between the ID check and now).
+	d.cleanupStale()
+
+	slog.Debug("docker executor cleanup done")
 	return nil
 }
 
@@ -922,4 +983,3 @@ echo "PATH_HOME=${HOME:-/root}"
 		"paths":        paths,
 	}, nil
 }
-

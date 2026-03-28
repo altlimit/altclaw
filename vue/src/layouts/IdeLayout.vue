@@ -543,12 +543,12 @@ function getLanguage(path: string | null) {
     <aside class="sidebar" v-show="currentActivity === 'workspace' || currentActivity === 'search' || currentActivity === 'chats' || currentActivity === 'cron' || currentActivity === 'modules' || currentActivity === 'memory' || currentActivity === 'secrets' || currentActivity === 'git' || currentActivity === 'providers'">
       <WorkspacePage ref="workspaceRef" v-show="currentActivity === 'workspace'" />
       <SearchPanel v-show="currentActivity === 'search'" />
-      <CronPanel v-show="currentActivity === 'cron'" />
-      <ModulesPanel v-show="currentActivity === 'modules'" />
-      <MemoryPanel v-show="currentActivity === 'memory'" />
-      <SecretPanel v-show="currentActivity === 'secrets'" />
-      <ProvidersPanel ref="providersPanelRef" v-show="currentActivity === 'providers'" />
-      <GitPanel v-show="currentActivity === 'git'" @open-diff="(data: any) => editorStore.openDiffTab(data.path, data.path.split('/').pop() || data.path, data.old_content, data.new_content)" />
+      <CronPanel v-if="currentActivity === 'cron'" />
+      <ModulesPanel v-if="currentActivity === 'modules'" />
+      <MemoryPanel v-if="currentActivity === 'memory'" />
+      <SecretPanel v-if="currentActivity === 'secrets'" />
+      <ProvidersPanel ref="providersPanelRef" v-if="currentActivity === 'providers'" />
+      <GitPanel v-if="currentActivity === 'git'" @open-diff="(data: any) => editorStore.openDiffTab(data.path, data.path.split('/').pop() || data.path, data.old_content, data.new_content)" />
       <div v-show="currentActivity === 'chats'" class="chats-sidebar">
         <div class="chats-header">
           <span class="chats-title">Chats</span>
@@ -652,21 +652,21 @@ function getLanguage(path: string | null) {
         <div v-show="editorStore.getActiveFile()?.type === 'config' || editorStore.getActiveFile()?.type === 'settings' || editorStore.getActiveFile()?.type === 'ws-settings'" class="tab-pane boxed">
           <SettingsPage />
         </div>
-        <div v-show="editorStore.getActiveFile()?.type === 'security'" class="tab-pane boxed">
+        <div v-if="editorStore.getActiveFile()?.type === 'security'" class="tab-pane boxed">
           <SecurityPage />
         </div>
-        <div v-show="editorStore.getActiveFile()?.type === 'tunnel'" class="tab-pane boxed">
+        <div v-if="editorStore.getActiveFile()?.type === 'tunnel'" class="tab-pane boxed">
           <TunnelPage />
         </div>
-        <div v-show="editorStore.getActiveFile()?.type === 'token-usage'" class="tab-pane boxed">
+        <div v-if="editorStore.getActiveFile()?.type === 'token-usage'" class="tab-pane boxed">
           <TokenUsagePage />
         </div>
-        <div v-show="editorStore.getActiveFile()?.type === 'logs'" class="tab-pane">
+        <div v-if="editorStore.getActiveFile()?.type === 'logs'" class="tab-pane">
           <LogPanel />
         </div>
         <!-- Provider config tabs (one per open provider) -->
         <template v-for="tab in editorStore.getTabs().filter(t => t.type === 'provider')" :key="tab.path">
-          <div v-show="editorStore.activeFilePath === tab.path" class="tab-pane boxed">
+          <div v-if="editorStore.activeFilePath === tab.path" class="tab-pane boxed">
             <ProviderConfigPage
               :provider-id="parseInt(tab.path.replace('special://provider-', ''), 10)"
               @saved="providersPanelRef?.reload()"
@@ -676,7 +676,7 @@ function getLanguage(path: string | null) {
         </template>
         <!-- Module detail tabs (one per open module:// path) -->
         <template v-for="tab in editorStore.getTabs().filter(t => t.type === 'module')" :key="tab.path">
-          <div v-show="editorStore.activeFilePath === tab.path" class="tab-pane">
+          <div v-if="editorStore.activeFilePath === tab.path" class="tab-pane">
             <ModuleDetailPage :path="tab.path" />
           </div>
         </template>

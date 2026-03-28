@@ -58,6 +58,13 @@ func SetupLogging(logPath, logLevel string, maxSizeMB, maxFiles int, extraHandle
 	slog.SetDefault(slog.New(handler))
 }
 
+// NewMultiHandler creates a slog.Handler that fans out each record to all
+// the provided handlers. This is useful for combining e.g. a text handler
+// with an in-memory log buffer.
+func NewMultiHandler(handlers ...slog.Handler) slog.Handler {
+	return &multiHandler{handlers: handlers}
+}
+
 // multiHandler fans out each log record to multiple slog.Handlers.
 type multiHandler struct {
 	handlers []slog.Handler
