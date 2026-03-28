@@ -561,6 +561,10 @@ func (d *Docker) Run(ctx context.Context, cmd string, args []string) (*Result, e
 	err = c.Run()
 	exitCode := 0
 	if err != nil {
+		// Context cancellation/timeout should surface as an error, not a non-zero exit code
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("docker exec: %w", ctx.Err())
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
