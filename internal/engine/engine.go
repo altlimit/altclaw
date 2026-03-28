@@ -484,6 +484,11 @@ func (e *Engine) SetProcess(mode, version, script string, envExtra map[string]st
 		}
 	}
 
+	// Auto-inject PORT so scripts can reach the web server via process.env.PORT
+	if port := os.Getenv("PORT"); port != "" {
+		envObj.Set("PORT", port)
+	}
+
 	// Auto-inject PUSH_NOTIFICATIONS if workspace has active subscriptions
 	if e.taskStore != nil && e.ws != nil {
 		if subs, err := e.taskStore.ListPushSubscriptions(context.Background(), e.ws.ID); err == nil && len(subs) > 0 {

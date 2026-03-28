@@ -145,7 +145,7 @@ func TestPodmanIntegration(t *testing.T) {
 			t.Fatalf("Spawn failed: %v", err)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(2 * time.Second)
 
 		output, err := d.GetOutput(id)
 		if err != nil {

@@ -36,10 +36,12 @@ type Docker struct {
 	networkName  string     // dedicated internal network for this executor instance
 	proxyRelay   string     // container ID of the proxy relay sidecar
 	proxyRelayIP string     // IP of the relay container on the internal network
-	allowedPorts []string   // host ports the proxy should allow through (e.g. the altclaw server port)
-	infraReady   bool       // true once network + relay are up
-	infraErr     error      // cached error from last infra attempt
-	infraRetries int        // number of infra retry attempts
+	allowedPorts  []string     // host ports the proxy should allow through (e.g. the altclaw server port)
+	heartbeatDir  string       // host temp dir mounted into containers for idle detection
+	heartbeatStop chan struct{} // stop channel for heartbeat goroutine
+	infraReady   bool          // true once network + relay are up
+	infraErr     error         // cached error from last infra attempt
+	infraRetries int           // number of infra retry attempts
 	infraMu      sync.Mutex // guards infra setup (separate from mu to avoid deadlock)
 
 	mu               sync.Mutex
@@ -146,6 +148,21 @@ func (d *Docker) ensureInfra() error {
 		d.infraErr = nil
 	}
 
+	// Set up heartbeat dir for container idle detection.
+	// The host process touches a file every 30s; containers monitor it
+	// and self-terminate when it goes stale (survives hard kills).
+	if d.heartbeatDir == "" {
+		dir, err := os.MkdirTemp("", "altclaw-hb-*")
+		if err != nil {
+			slog.Warn("failed to create heartbeat dir, containers won't auto-stop", "err", err)
+		} else {
+			d.heartbeatDir = dir
+			_ = os.WriteFile(filepath.Join(dir, "alive"), nil, 0644)
+			d.heartbeatStop = make(chan struct{})
+			go d.heartbeatLoop()
+		}
+	}
+
 	d.networkName = fmt.Sprintf("%s-net", d.prefix)
 
 	// Setup isolated internal network
@@ -163,6 +180,27 @@ func (d *Docker) ensureInfra() error {
 
 	d.infraReady = true
 	return nil
+}
+
+// containerIdleTimeout is how long (seconds) containers wait after the last
+// heartbeat before self-terminating. Survives hard kills of the host process.
+const containerIdleTimeout = 60 // heartbeat is every 30s; only stops when process dies
+
+// heartbeatLoop periodically touches the heartbeat file so containers know
+// the host process is still alive.
+func (d *Docker) heartbeatLoop() {
+	hbFile := filepath.Join(d.heartbeatDir, "alive")
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			_ = os.Chtimes(hbFile, now, now)
+		case <-d.heartbeatStop:
+			return
+		}
+	}
 }
 
 // setupNetwork creates an --internal Docker network.
@@ -265,6 +303,12 @@ func (d *Docker) startProxyRelay() error {
 	if allowedPorts != "" {
 		args = append(args, "-e", "ALLOWED_PORTS="+allowedPorts)
 	}
+	// Mount heartbeat dir so relay can detect host process death
+	if d.heartbeatDir != "" {
+		args = append(args, "-v", d.heartbeatDir+":/tmp/altclaw-hb:ro")
+		args = append(args, "-e", "HEARTBEAT_FILE=/tmp/altclaw-hb/alive")
+		args = append(args, "-e", fmt.Sprintf("IDLE_TIMEOUT=%d", containerIdleTimeout))
+	}
 	args = append(args, proxyImage)
 	cmd := exec.Command(d.cli, args...)
 	cmd.Stdout = &stdout
@@ -331,32 +375,30 @@ func (d *Docker) startProxyRelay() error {
 }
 
 // getContainerIPOnNetwork queries the network to find a container's IP.
-// This is more reliable than inspecting the container's NetworkSettings
-// which can be empty on some Docker configurations.
+// Tries multiple methods for Docker/Podman compatibility.
 func (d *Docker) getContainerIPOnNetwork(network, containerName string) (string, error) {
-	// Method 1: network inspect with JSON
+	// Method 1: network inspect with Go template (Docker-style)
+	// This doesn't work on Podman 4.x (no .Containers field), so failures fall through.
 	var stdout bytes.Buffer
 	cmd := exec.Command(d.cli, "network", "inspect", network, "--format",
 		`{{range $id, $c := .Containers}}{{$c.Name}}={{$c.IPv4Address}} {{end}}`)
 	cmd.Stdout = &stdout
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("network inspect: %w", err)
-	}
-
-	// Parse "name=172.18.0.2/16 name2=172.18.0.3/16"
-	for _, entry := range strings.Fields(stdout.String()) {
-		parts := strings.SplitN(entry, "=", 2)
-		if len(parts) == 2 && parts[0] == containerName {
-			ip := parts[1]
-			// Strip CIDR suffix (e.g. "172.18.0.2/16" → "172.18.0.2")
-			if idx := strings.Index(ip, "/"); idx > 0 {
-				ip = ip[:idx]
+	if err := cmd.Run(); err == nil {
+		// Parse "name=172.18.0.2/16 name2=172.18.0.3/16"
+		for _, entry := range strings.Fields(stdout.String()) {
+			parts := strings.SplitN(entry, "=", 2)
+			if len(parts) == 2 && parts[0] == containerName {
+				ip := parts[1]
+				// Strip CIDR suffix (e.g. "172.18.0.2/16" → "172.18.0.2")
+				if idx := strings.Index(ip, "/"); idx > 0 {
+					ip = ip[:idx]
+				}
+				return ip, nil
 			}
-			return ip, nil
 		}
 	}
 
-	// Method 2: fallback to container inspect
+	// Method 2: container inspect with specific network (works on both Docker and Podman)
 	var ipOut bytes.Buffer
 	ipCmd := exec.Command(d.cli, "inspect", "-f",
 		fmt.Sprintf(`{{(index .NetworkSettings.Networks "%s").IPAddress}}`, network),
@@ -372,6 +414,7 @@ func (d *Docker) getContainerIPOnNetwork(network, containerName string) (string,
 	}
 	return ip, nil
 }
+
 
 // cleanupStale removes any Docker containers with our naming prefix
 // that may be left over from a previous run (e.g. crash, kill -9).
@@ -423,13 +466,27 @@ func (d *Docker) spawnContainer(ctx context.Context, image string) (string, erro
 		"-e", "no_proxy=localhost,127.0.0.1",
 		"-v", d.Workspace + ":" + d.MountPath,
 	}
+	// Mount heartbeat dir so containers detect host process death
+	if d.heartbeatDir != "" {
+		args = append(args, "-v", d.heartbeatDir+":/tmp/altclaw-hb:ro")
+	}
 	// Add extra volumes from SetImage opts
 	d.mu.Lock()
 	for _, v := range d.extraVolumes {
 		args = append(args, "-v", v)
 	}
 	d.mu.Unlock()
-	args = append(args, "-w", d.MountPath, image, "sleep", "infinity")
+	// Use idle-detecting watchdog instead of sleep infinity.
+	// Checks heartbeat file mtime; exits when stale (host process dead).
+	// Falls back to sleep infinity when no heartbeat dir is available.
+	if d.heartbeatDir != "" {
+		watchdog := fmt.Sprintf(
+			`while true; do sleep 30; [ ! -f /tmp/altclaw-hb/alive ] && exit 0; now=$(date +%%s); mod=$(stat -c %%Y /tmp/altclaw-hb/alive 2>/dev/null || echo $now); [ $(( now - mod )) -gt %d ] && exit 0; done`,
+			containerIdleTimeout)
+		args = append(args, "-w", d.MountPath, image, "sh", "-c", watchdog)
+	} else {
+		args = append(args, "-w", d.MountPath, image, "sleep", "infinity")
+	}
 	cmd := exec.CommandContext(ctx, d.cli, args...)
 	cmd.Stdout = &stdout
 	var stderr bytes.Buffer
@@ -637,6 +694,17 @@ func (d *Docker) Cleanup() error {
 	// Remove isolated network
 	if d.networkName != "" {
 		_ = exec.Command(d.cli, "network", "rm", d.networkName).Run()
+	}
+
+	// Stop heartbeat goroutine and remove heartbeat dir.
+	// Removing the dir causes containers to detect the missing file and exit.
+	if d.heartbeatStop != nil {
+		close(d.heartbeatStop)
+		d.heartbeatStop = nil
+	}
+	if d.heartbeatDir != "" {
+		_ = os.RemoveAll(d.heartbeatDir)
+		d.heartbeatDir = ""
 	}
 
 	d.infraReady = false

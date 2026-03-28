@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"altclaw.ai/internal/agent"
@@ -699,6 +700,33 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	)
 	slog.SetDefault(slog.New(config.NewMultiHandler(tuiHandler, logBuf)))
 
+	// Graceful cleanup for non-verbose mode
+	cleanupOnce := sync.OnceFunc(func() {
+		if cronMgr != nil {
+			cronMgr.Stop()
+		}
+		if currentExec != nil {
+			currentExec.Cleanup()
+		}
+		store.Close()
+	})
+
+	// Expose cleanup for GUI shutdown (window close)
+	guiShutdownFn = func() {
+		slog.Info("GUI shutdown: cleaning up")
+		cleanupOnce()
+	}
+
+	// Signal handling for graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		slog.Info("shutting down")
+		cleanupOnce()
+		p.Kill()
+	}()
+
 	// Start server in background
 	go func() {
 		err := srv.Start(addr, func(actualAddr string) {
@@ -725,11 +753,8 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	}()
 
 	_, err = p.Run()
-	// Clean up when TUI exits
-	if currentExec != nil {
-		currentExec.Cleanup()
-	}
-	store.Close()
+	// Clean up when TUI exits (idempotent via sync.Once)
+	cleanupOnce()
 	return err
 }
 

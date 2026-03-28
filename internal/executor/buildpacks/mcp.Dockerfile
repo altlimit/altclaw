@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM docker.io/library/node:22-slim
 
 # Install Python 3 and common build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
