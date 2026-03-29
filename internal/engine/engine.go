@@ -14,6 +14,7 @@ import (
 
 	"altclaw.ai/internal/bridge"
 	"altclaw.ai/internal/config"
+	"altclaw.ai/internal/cron"
 	"altclaw.ai/internal/executor"
 	"altclaw.ai/internal/provider"
 	"altclaw.ai/stdlib"
@@ -87,6 +88,17 @@ type Engine struct {
 // Entries are searched in order (first match wins).
 func (e *Engine) WithModuleDirs(dirs ...string) *Engine {
 	e.moduleDirs = append(e.moduleDirs, dirs...)
+	return e
+}
+
+// WithCronManager registers the cron bridge on the engine's VM.
+// This consolidates cron bridge registration so every engine that needs
+// cron.add/rm/list gets it consistently. chatIDFn provides the current
+// chat ID for associating jobs with conversations.
+func (e *Engine) WithCronManager(mgr *cron.Manager, chatIDFn func() int64) *Engine {
+	if mgr != nil {
+		bridge.RegisterCron(e.vm, mgr, e.ws.Path, chatIDFn, e.BroadcastCtx)
+	}
 	return e
 }
 

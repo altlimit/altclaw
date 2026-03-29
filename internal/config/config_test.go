@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 )
 
 func TestNewStore(t *testing.T) {
@@ -20,23 +22,32 @@ func TestNewStore(t *testing.T) {
 	}
 	defer store.Close()
 
-	// Verify .env was created with ALTCLAW_ENC_KEY
+	// Key may be stored in OS keyring (wincred/Keychain/libsecret) or in .env fallback.
+	// Check .env first — if it exists, verify its contents.
 	envPath := filepath.Join(dir, ".env")
-	data, err := os.ReadFile(envPath)
-	if err != nil {
-		t.Fatalf(".env should exist: %v", err)
-	}
-	content := string(data)
-	if !strings.Contains(content, "ALTCLAW_ENC_KEY=") {
-		t.Error(".env should contain ALTCLAW_ENC_KEY")
-	}
-	// Key should be 64 hex chars
-	for _, line := range strings.Split(content, "\n") {
-		if strings.HasPrefix(line, "ALTCLAW_ENC_KEY=") {
-			hexKey := strings.TrimPrefix(line, "ALTCLAW_ENC_KEY=")
-			if len(hexKey) != 64 {
-				t.Errorf("ALTCLAW_ENC_KEY should be 64 hex chars, got %d", len(hexKey))
+	data, envErr := os.ReadFile(envPath)
+	if envErr == nil {
+		content := string(data)
+		if !strings.Contains(content, "ALTCLAW_ENC_KEY=") {
+			t.Error(".env should contain ALTCLAW_ENC_KEY")
+		}
+		// Key should be 64 hex chars
+		for _, line := range strings.Split(content, "\n") {
+			if strings.HasPrefix(line, "ALTCLAW_ENC_KEY=") {
+				hexKey := strings.TrimSpace(strings.TrimPrefix(line, "ALTCLAW_ENC_KEY="))
+				if len(hexKey) != 64 {
+					t.Errorf("ALTCLAW_ENC_KEY should be 64 hex chars, got %d", len(hexKey))
+				}
 			}
+		}
+	} else {
+		// No .env — key should be in OS keyring
+		k, keyErr := keyring.Get("altclaw", "encryption_key")
+		if keyErr != nil || k == "" {
+			t.Fatalf("encryption key not found in .env or OS keyring: envErr=%v, keyringErr=%v", envErr, keyErr)
+		}
+		if len(k) != 64 {
+			t.Errorf("keyring key should be 64 hex chars, got %d", len(k))
 		}
 	}
 }

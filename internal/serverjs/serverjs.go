@@ -697,12 +697,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, scriptPath, 
 // createEngine creates a fresh engine with all bridges registered.
 func (h *Handler) createEngine() *engine.Engine {
 	ui := &serverUI{}
-	eng := engine.New(h.Ws, h.Exec, ui, "", h.Store)
+	eng := engine.New(h.Ws, h.Exec, ui, "", h.Store).
+		WithCronManager(h.CronMgr, func() int64 { return 0 })
 	if h.OnBroadcast != nil {
 		eng.OnBroadcast = h.OnBroadcast
-	}
-	if h.CronMgr != nil {
-		bridge.RegisterCron(eng.VM(), h.CronMgr, h.Workspace, func() int64 { return 0 }, eng.BroadcastCtx)
 	}
 	return eng
 }

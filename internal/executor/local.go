@@ -78,7 +78,7 @@ func (l *Local) Run(ctx context.Context, cmd string, args []string) (*Result, er
 		return nil, fmt.Errorf("command %q not in whitelist", cmd)
 	}
 
-	c := exec.CommandContext(ctx, cmd, args...)
+	c := commandContext(ctx, cmd, args...)
 	c.Dir = l.Workspace
 
 	var stdout, stderr bytes.Buffer
@@ -125,7 +125,7 @@ func (l *Local) Spawn(ctx context.Context, cmd string, args []string) (string, e
 		return "", fmt.Errorf("command %q not in whitelist", cmd)
 	}
 
-	c := exec.CommandContext(ctx, cmd, args...)
+	c := commandContext(ctx, cmd, args...)
 	c.Dir = l.Workspace
 
 	var stdout, stderr bytes.Buffer
@@ -235,6 +235,7 @@ func (l *Local) Popen(ctx context.Context, cmd string, args []string) (string, e
 	}
 
 	c := exec.CommandContext(ctx, cmd, args...)
+	hideWindow(c)
 	c.Dir = l.Workspace
 
 	envMap := EnvFrom(ctx)
@@ -360,7 +361,7 @@ func (l *Local) Info(ctx context.Context) (map[string]any, error) {
 			}
 		}
 	} else if runtime.GOOS == "darwin" {
-		if out, err := exec.CommandContext(ctx, "sw_vers", "-productVersion").Output(); err == nil {
+		if out, err := commandContext(ctx, "sw_vers", "-productVersion").Output(); err == nil {
 			osInfo["distro"] = "macos"
 			osInfo["version"] = strings.TrimSpace(string(out))
 		}
@@ -368,7 +369,7 @@ func (l *Local) Info(ctx context.Context) (map[string]any, error) {
 
 	// Kernel version
 	if runtime.GOOS != "windows" {
-		if out, err := exec.CommandContext(ctx, "uname", "-r").Output(); err == nil {
+		if out, err := commandContext(ctx, "uname", "-r").Output(); err == nil {
 			osInfo["kernel"] = strings.TrimSpace(string(out))
 		}
 	}
@@ -466,7 +467,7 @@ func probeRuntimes(ctx context.Context) map[string]any {
 		if _, err := exec.LookPath(bin); err != nil {
 			continue
 		}
-		cmd := exec.CommandContext(ctx, bin, flag)
+		cmd := commandContext(ctx, bin, flag)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		cmd.Stderr = &out

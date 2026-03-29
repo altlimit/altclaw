@@ -25,6 +25,7 @@ import (
 	"altclaw.ai/internal/bridge"
 	"altclaw.ai/internal/config"
 	"altclaw.ai/internal/cron"
+	"altclaw.ai/internal/executor"
 	"altclaw.ai/internal/mcp"
 	"altclaw.ai/internal/serverjs"
 	"github.com/altlimit/restruct"
@@ -163,6 +164,11 @@ type Server struct {
 	mcpServer      *mcp.Server
 	GUIMode        bool // When true, skip auth for localhost (Wails webview)
 	mu             sync.Mutex
+
+	// Exec is the shared executor instance (Docker/Podman/Local) used by
+	// RunScript to avoid creating a new container per invocation.
+	Exec     executor.Executor
+	ExecType string // resolved type: "docker", "podman", "local", "none"
 
 	// NewAgent rebuilds the agent when config changes
 	NewAgent func(providerName string) (*agent.Agent, error)

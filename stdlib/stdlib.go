@@ -78,11 +78,11 @@ func List() []ModuleInfo {
 				for _, match := range metaRe.FindAllStringSubmatch(block, -1) {
 					switch match[1] {
 					case "name":
-						info.Name = match[2]
+						info.Name = strings.TrimRight(match[2], "\r")
 					case "description":
-						info.Description = match[2]
+						info.Description = strings.TrimRight(match[2], "\r")
 					case "example":
-						info.Example = match[2]
+						info.Example = strings.TrimRight(match[2], "\r")
 					}
 				}
 			}

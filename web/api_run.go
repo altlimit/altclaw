@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	osexec "os/exec"
 
 	"altclaw.ai/internal/bridge"
 	"altclaw.ai/internal/engine"
@@ -52,32 +51,16 @@ func (a *Api) RunScript(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), ws.TimeoutFor("run"))
 	defer cancel()
 
-	// Build executor from app config
-	var exec executor.Executor
-	var execType string
+	// Use the shared executor from the server — avoids creating a new Docker
+	// container for every RunScript invocation.
+	exec := a.server.Exec
+	execType := a.server.ExecType
 
-	if appCfg := a.server.store.Config(); appCfg != nil {
-		resolvedType := appCfg.Executor
-		if resolvedType == "" || resolvedType == "auto" {
-			if _, lookErr := osexec.LookPath("docker"); lookErr == nil {
-				resolvedType = "docker"
-			} else if _, lookErr := osexec.LookPath("podman"); lookErr == nil {
-				resolvedType = "podman"
-			} else {
-				resolvedType = "local"
-			}
-		}
-		execType = resolvedType
-		switch resolvedType {
-		case "docker", "podman":
-			img := appCfg.DockerImage
-			if img == "" {
-				img = "ubuntu:latest"
-			}
-			exec, _ = executor.NewDocker(resolvedType, img, ws.Path, "/workspace")
-		default:
-			exec = executor.NewLocal(ws.Path, appCfg.LocalWhitelist)
-		}
+	// Fallback: build a local executor if no shared executor is available
+	// (e.g. first run before any providers are configured).
+	if exec == nil {
+		exec = executor.NewLocal(ws.Path, nil)
+		execType = "local"
 	}
 
 	ui := &scriptRunnerUI{send: send}
@@ -96,6 +79,9 @@ func (a *Api) RunScript(w http.ResponseWriter, r *http.Request) {
 		}
 		return goja.Undefined()
 	})
+
+	// Register cron bridge so require("cron") works in run scripts
+	eng.WithCronManager(a.server.cronMgr, func() int64 { return 0 })
 
 	defer eng.Cleanup()
 

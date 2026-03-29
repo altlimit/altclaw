@@ -173,7 +173,7 @@ func (d *Docker) ensureInfra() error {
 
 	// Start SSRF proxy relay sidecar
 	if err := d.startProxyRelay(); err != nil {
-		_ = exec.Command(d.cli, "network", "rm", d.networkName).Run()
+		_ = command(d.cli, "network", "rm", d.networkName).Run()
 		d.infraErr = err
 		return err
 	}
@@ -207,10 +207,10 @@ func (d *Docker) heartbeatLoop() {
 // Internal networks block ALL external access, including to the host.
 // App containers use the proxy relay sidecar (also on this network) for internet.
 func (d *Docker) setupNetwork() error {
-	_ = exec.Command(d.cli, "network", "rm", d.networkName).Run()
+	_ = command(d.cli, "network", "rm", d.networkName).Run()
 
 	var stderr bytes.Buffer
-	cmd := exec.Command(d.cli, "network", "create", "--internal", d.networkName)
+	cmd := command(d.cli, "network", "create", "--internal", d.networkName)
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create docker network %s: %s", d.networkName, stderr.String())
@@ -231,12 +231,12 @@ func (d *Docker) ensureProxyImage() (string, error) {
 	tag := "altclaw/proxy:" + hash
 
 	// Check if already built
-	if err := exec.Command(d.cli, "image", "inspect", tag).Run(); err == nil {
+	if err := command(d.cli, "image", "inspect", tag).Run(); err == nil {
 		return tag, nil
 	}
 
 	slog.Info("building SSRF proxy image (first time only)", "tag", tag)
-	cmd := exec.Command(d.cli, "build", "-t", tag, "-")
+	cmd := command(d.cli, "build", "-t", tag, "-")
 	cmd.Stdin = bytes.NewReader(data)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -280,7 +280,7 @@ func (d *Docker) startProxyRelay() error {
 	relayName := d.prefix + "-relay"
 
 	// Clean up any stale relay container
-	_ = exec.Command(d.cli, "rm", "-f", "-v", relayName).Run()
+	_ = command(d.cli, "rm", "-f", "-v", relayName).Run()
 
 	// Build the Go-based SSRF proxy image (cached by content hash)
 	proxyImage, err := d.ensureProxyImage()
@@ -310,7 +310,7 @@ func (d *Docker) startProxyRelay() error {
 		args = append(args, "-e", fmt.Sprintf("IDLE_TIMEOUT=%d", containerIdleTimeout))
 	}
 	args = append(args, proxyImage)
-	cmd := exec.Command(d.cli, args...)
+	cmd := command(d.cli, args...)
 	cmd.Stdout = &stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -324,11 +324,11 @@ func (d *Docker) startProxyRelay() error {
 
 	// Verify the relay container is still running
 	var stateOut bytes.Buffer
-	stateCmd := exec.Command(d.cli, "inspect", "-f", "{{.State.Running}}", relayName)
+	stateCmd := command(d.cli, "inspect", "-f", "{{.State.Running}}", relayName)
 	stateCmd.Stdout = &stateOut
 	if err := stateCmd.Run(); err == nil && strings.TrimSpace(stateOut.String()) != "true" {
 		var logsOut bytes.Buffer
-		logsCmd := exec.Command(d.cli, "logs", "--tail", "20", relayName)
+		logsCmd := command(d.cli, "logs", "--tail", "20", relayName)
 		logsCmd.Stdout = &logsOut
 		logsCmd.Stderr = &logsOut
 		_ = logsCmd.Run()
@@ -337,7 +337,7 @@ func (d *Docker) startProxyRelay() error {
 	}
 
 	// Connect the relay container to the internal network
-	connCmd := exec.Command(d.cli, "network", "connect", d.networkName, relayName)
+	connCmd := command(d.cli, "network", "connect", d.networkName, relayName)
 	var connErr bytes.Buffer
 	connCmd.Stderr = &connErr
 	if err := connCmd.Run(); err != nil {
@@ -380,7 +380,7 @@ func (d *Docker) getContainerIPOnNetwork(network, containerName string) (string,
 	// Method 1: network inspect with Go template (Docker-style)
 	// This doesn't work on Podman 4.x (no .Containers field), so failures fall through.
 	var stdout bytes.Buffer
-	cmd := exec.Command(d.cli, "network", "inspect", network, "--format",
+	cmd := command(d.cli, "network", "inspect", network, "--format",
 		`{{range $id, $c := .Containers}}{{$c.Name}}={{$c.IPv4Address}} {{end}}`)
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err == nil {
@@ -400,7 +400,7 @@ func (d *Docker) getContainerIPOnNetwork(network, containerName string) (string,
 
 	// Method 2: container inspect with specific network (works on both Docker and Podman)
 	var ipOut bytes.Buffer
-	ipCmd := exec.Command(d.cli, "inspect", "-f",
+	ipCmd := command(d.cli, "inspect", "-f",
 		fmt.Sprintf(`{{(index .NetworkSettings.Networks "%s").IPAddress}}`, network),
 		containerName,
 	)
@@ -420,7 +420,7 @@ func (d *Docker) getContainerIPOnNetwork(network, containerName string) (string,
 // that may be left over from a previous run (e.g. crash, kill -9).
 func (d *Docker) cleanupStale() {
 	var stdout bytes.Buffer
-	cmd := exec.Command(d.cli, "ps", "-a", "-q",
+	cmd := command(d.cli, "ps", "-a", "-q",
 		"--filter", "name=^"+d.prefix+"-",
 	)
 	cmd.Stdout = &stdout
@@ -487,7 +487,7 @@ func (d *Docker) spawnContainer(ctx context.Context, image string) (string, erro
 	} else {
 		args = append(args, "-w", d.MountPath, image, "sleep", "infinity")
 	}
-	cmd := exec.CommandContext(ctx, d.cli, args...)
+	cmd := commandContext(ctx, d.cli, args...)
 	cmd.Stdout = &stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -503,7 +503,7 @@ func (d *Docker) spawnContainer(ctx context.Context, image string) (string, erro
 
 // stopContainer stops and removes a container.
 func (d *Docker) stopContainer(containerID string) {
-	_ = exec.Command(d.cli, "rm", "-f", "-v", containerID).Run()
+	_ = command(d.cli, "rm", "-f", "-v", containerID).Run()
 }
 
 // containerForSession returns the container ID to use for the given context.
@@ -553,7 +553,7 @@ func (d *Docker) Run(ctx context.Context, cmd string, args []string) (*Result, e
 	dockerArgs = append(dockerArgs, containerID, cmd)
 	dockerArgs = append(dockerArgs, args...)
 
-	c := exec.CommandContext(ctx, d.cli, dockerArgs...)
+	c := commandContext(ctx, d.cli, dockerArgs...)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
@@ -610,7 +610,7 @@ func (d *Docker) Spawn(ctx context.Context, cmd string, args []string) (string, 
 	dockerArgs = append(dockerArgs, containerID, cmd)
 	dockerArgs = append(dockerArgs, args...)
 
-	c := exec.CommandContext(ctx, d.cli, dockerArgs...)
+	c := commandContext(ctx, d.cli, dockerArgs...)
 	var stdout, stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
@@ -697,7 +697,7 @@ func (d *Docker) Cleanup() error {
 
 	// Remove isolated network
 	if d.networkName != "" {
-		_ = exec.Command(d.cli, "network", "rm", d.networkName).Run()
+		_ = command(d.cli, "network", "rm", d.networkName).Run()
 	}
 
 	// Stop heartbeat goroutine and remove heartbeat dir.
@@ -798,14 +798,14 @@ func (d *Docker) resolveAndBuild(image, build string) (string, error) {
 	tag := image + ":" + hash
 
 	// Check if image already exists
-	if err := exec.Command(d.cli, "image", "inspect", tag).Run(); err == nil {
+	if err := command(d.cli, "image", "inspect", tag).Run(); err == nil {
 		slog.Debug("image already exists, skipping build", "tag", tag)
 		return tag, nil
 	}
 
 	// Build the image
 	slog.Info("building Docker image", "tag", tag, "source", build)
-	cmd := exec.Command(d.cli, "build", "-t", tag, "-")
+	cmd := command(d.cli, "build", "-t", tag, "-")
 	cmd.Stdin = bytes.NewReader(content)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -846,7 +846,7 @@ func (d *Docker) Popen(ctx context.Context, cmd string, args []string) (string, 
 	dockerArgs = append(dockerArgs, containerID, cmd)
 	dockerArgs = append(dockerArgs, args...)
 
-	c := exec.CommandContext(ctx, d.cli, dockerArgs...)
+	c := commandContext(ctx, d.cli, dockerArgs...)
 
 	stdinPipe, err := c.StdinPipe()
 	if err != nil {

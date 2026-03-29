@@ -328,11 +328,9 @@ func buildAgentWithLogBuf(store *config.Store, ws *config.Workspace, providerNam
 	eng.SetAgentRunner(ag)
 
 	// Register cron bridge if a manager was provided
-	if cronMgr != nil {
-		bridge.RegisterCron(eng.VM(), cronMgr, ws.Path, func() int64 {
-			return ag.ChatID
-		}, eng.BroadcastCtx)
-	}
+	eng.WithCronManager(cronMgr, func() int64 {
+		return ag.ChatID
+	})
 
 	return ag, eng, nil
 }
@@ -464,6 +462,7 @@ func startWeb(store *config.Store, workspace, addr string) error {
 					},
 				}, "", store, logBuf).WithModuleDirs(store.ModuleDirs(ws.ID))
 				scriptEng.SetProcess("cron", "", "", executorEnv(activeExecType, activeDockerImage))
+				scriptEng.WithCronManager(cronMgr, func() int64 { return activeChatID })
 				// Wire broadcast for bridge mutations in cron scripts
 				if broadcastPanel != nil {
 					scriptEng.OnBroadcast = broadcastPanel
@@ -559,17 +558,29 @@ func startWeb(store *config.Store, workspace, addr string) error {
 		if !store.IsConfigured() {
 			return nil, fmt.Errorf("no providers configured")
 		}
-		appCfg := store.Config()
-		newExec, newExecType, err := buildExecutor(appCfg, workspace)
-		if err != nil {
-			return nil, err
+
+		// Reuse the shared executor — creating a new one per chat would
+		// destroy the executor that cron and serverjs are still using.
+		// Only bootstrap a new executor when starting from unconfigured state.
+		if currentExec == nil {
+			appCfg := store.Config()
+			newExec, newExecType, execErr := buildExecutor(appCfg, workspace)
+			if execErr != nil {
+				return nil, execErr
+			}
+			currentExec = newExec
+			exec = newExec
+			activeExecType = newExecType
+			activeDockerImage = appCfg.DockerImage
+			srv.Exec = newExec
+			srv.ExecType = newExecType
 		}
+
 		handler := &webUIHandler{}
-		newAg, newEng, err := buildAgent(store, ws, providerName, handler, newExec, newExecType, cronMgr)
+		newAg, newEng, err := buildAgent(store, ws, providerName, handler, currentExec, activeExecType, cronMgr)
 		handler.agFunc = func() *agent.Agent { return newAg }
 		handler.server = srv
 		if err != nil {
-			newExec.Cleanup()
 			return nil, err
 		}
 		// Wire SSE broadcast for bridge mutations
@@ -578,13 +589,6 @@ func startWeb(store *config.Store, workspace, addr string) error {
 		}
 		// Wire confirm context for ui.confirm
 		newEng.SetConfirmContext(srv.NewConfirmContext())
-		// Clean up old executor and track new one
-		if currentExec != nil {
-			currentExec.Cleanup()
-		}
-		currentExec = newExec
-		activeExecType = newExecType
-		activeDockerImage = appCfg.DockerImage
 		newAg.Ws = ws
 		return newAg, nil
 	})
@@ -592,6 +596,10 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	if initialHandler != nil {
 		initialHandler.server = srv
 	}
+
+	// Share the initial executor with the server for RunScript
+	srv.Exec = exec
+	srv.ExecType = activeExecType
 
 	// In GUI (Wails) mode, skip session auth for localhost requests.
 	// The webview is a trusted local context and should never be kicked out.
@@ -792,7 +800,9 @@ func startTUI(store *config.Store, workspace string) error {
 	var ag *agent.Agent
 
 	// Create a single cron manager for this workspace
-	cronMgr, cronErr := cron.New(store, ws.ID, func(jobID, chatID int64, instructions string, isScript bool) {
+	var cronMgr *cron.Manager
+	var cronErr error
+	cronMgr, cronErr = cron.New(store, ws.ID, func(jobID, chatID int64, instructions string, isScript bool) {
 		if isScript {
 			slog.Info("cron script executing", "job_id", jobID, "chat_id", chatID, "instructions", instructions)
 			go func() {
@@ -800,6 +810,7 @@ func startTUI(store *config.Store, workspace string) error {
 					LogFunc: func(msg string) { slog.Info("cron", "output", msg) },
 				}, "", store, logBuf).WithModuleDirs(store.ModuleDirs(ws.ID))
 				scriptEng.SetProcess("cron", "", "", executorEnv(resolvedExecType, appCfg.DockerImage))
+				scriptEng.WithCronManager(cronMgr, func() int64 { return chatID })
 				// Wire agent bridge so cron scripts can call agent.run()/agent.result()
 				if ag != nil {
 					scriptEng.SetAgentRunner(ag)
@@ -837,28 +848,19 @@ func startTUI(store *config.Store, workspace string) error {
 		}
 	}))
 
-	// Track current executor/engine for cleanup on provider switch
-	currentExec := exec
+	// Track current engine for cleanup on provider switch
 	currentEng := eng
 
-	// Wire up provider switching
+	// Wire up provider switching — reuse the shared executor across rebuilds
 	model.RebuildAgent = func(providerName string) (*agent.Agent, error) {
-		newAppCfg := store.Config()
-		newExec, newExecType, err := buildExecutor(newAppCfg, workspace)
+		newAg, newEng, err := buildAgent(store, ws, providerName, model, exec, resolvedExecType, cronMgr)
 		if err != nil {
-			return nil, err
-		}
-		newAg, newEng, err := buildAgent(store, ws, providerName, model, newExec, newExecType, cronMgr)
-		if err != nil {
-			newExec.Cleanup()
 			return nil, err
 		}
 		// Wire ui.confirm on the new engine
 		newEng.SetConfirmContext(tui.NewConfirmContext(store, ws, nil))
-		// Clean up old resources
+		// Clean up old engine (but not the shared executor)
 		currentEng.Cleanup()
-		currentExec.Cleanup()
-		currentExec = newExec
 		currentEng = newEng
 		return newAg, nil
 	}
