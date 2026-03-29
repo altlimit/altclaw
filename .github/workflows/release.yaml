@@ -4,6 +4,15 @@ on:
   push:
     branches:
       - "main"
+    paths-ignore:
+      - "*.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+      - "docs/**"
+      - ".vscode/**"
+      - ".github/**"
+      - "build.sh"
   workflow_dispatch:
 
 permissions:

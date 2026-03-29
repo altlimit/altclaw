@@ -4,6 +4,28 @@
 
 Ship it as a single Go binary. Run it anywhere — desktop, server, or edge.
 
+## Installation
+
+### GUI Download
+
+For a native desktop experience, download the pre-built GUI binaries for **macOS**, **Windows**, or **Linux** directly from the [GitHub Releases](https://github.com/altlimit/altclaw/releases) page.
+
+### CLI Install
+
+Install via [alt](https://github.com/altlimit/alt) — a stateless, zero-config CLI distribution proxy, or optionally download the pre-built CLI binaries from the [GitHub Releases](https://github.com/altlimit/altclaw/releases) page.
+
+**Linux & macOS**
+```bash
+curl -fsSL https://raw.githubusercontent.com/altlimit/alt/main/scripts/install.sh | sh
+alt install altlimit/altclaw
+```
+
+**Windows (PowerShell)**
+```powershell
+powershell -Command "iwr https://raw.githubusercontent.com/altlimit/alt/main/scripts/install.ps1 -useb | iex"
+alt install altlimit/altclaw
+```
+
 ---
 
 ## Features
@@ -92,14 +114,6 @@ Full API docs available at runtime via `doc.read("module")`, `doc.find("keyword"
 - **Log Buffer** — In-memory ring buffer (200 entries) accessible via the `log` bridge and the web API.
 
 ---
-
-## Installation
-
-```bash
-curl -s -S -L https://raw.githubusercontent.com/altlimit/altclaw/master/install.sh | bash
-```
-
-Pre-built binaries available for **Linux** (amd64, arm64), **macOS** (Intel, Apple Silicon), and **Windows**.
 
 ## Quick Start
 
