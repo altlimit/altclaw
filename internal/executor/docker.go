@@ -457,6 +457,14 @@ func (d *Docker) spawnContainer(ctx context.Context, image string) (string, erro
 	args := []string{"run", "-d",
 		"--restart=no",
 		"--name", name,
+	}
+	// Map container user to host UID/GID so files on the bind mount
+	// are owned by the current user, not root.  os.Getuid returns -1
+	// on Windows where Docker Desktop handles ownership via its VM.
+	if uid := os.Getuid(); uid >= 0 {
+		args = append(args, "--user", fmt.Sprintf("%d:%d", uid, os.Getgid()))
+	}
+	args = append(args,
 		"--network", d.networkName,
 		"-e", "HTTP_PROXY=" + proxyURL,
 		"-e", "HTTPS_PROXY=" + proxyURL,
@@ -464,8 +472,8 @@ func (d *Docker) spawnContainer(ctx context.Context, image string) (string, erro
 		"-e", "https_proxy=" + proxyURL,
 		"-e", "NO_PROXY=localhost,127.0.0.1",
 		"-e", "no_proxy=localhost,127.0.0.1",
-		"-v", d.Workspace + ":" + d.MountPath,
-	}
+		"-v", d.Workspace+":"+d.MountPath,
+	)
 	// Mount heartbeat dir so containers detect host process death
 	if d.heartbeatDir != "" {
 		args = append(args, "-v", d.heartbeatDir+":/tmp/altclaw-hb:ro")

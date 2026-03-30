@@ -36,7 +36,7 @@ async function fetchLogs() {
     const resp = await fetch(url.toString())
     if (!resp.ok) throw new Error(await resp.text())
     const data = await resp.json()
-    entries.value = data.entries || []
+    entries.value = (data.entries || []).reverse()
     if (autoScroll.value) {
       nextTick(() => scrollToBottom())
     }

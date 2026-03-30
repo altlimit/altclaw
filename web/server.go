@@ -57,8 +57,15 @@ type chatSession struct {
 }
 
 // bufferAndBroadcast records the event for replay and broadcasts it via the hub.
+// Skips events after the session has stopped to prevent stray sub-agent logs
+// from reaching the frontend and re-triggering the "sending" state.
 func (s *chatSession) bufferAndBroadcast(hub *EventHub, evt chatEvent) {
 	s.mu.Lock()
+	if !s.running && evt.Type != "done" && evt.Type != "error" && evt.Type != "meta" {
+		// Session already finished — drop stale events (e.g. from sub-agents winding down)
+		s.mu.Unlock()
+		return
+	}
 	s.pendingEvents = append(s.pendingEvents, evt)
 	s.mu.Unlock()
 	hub.Broadcast(evt)

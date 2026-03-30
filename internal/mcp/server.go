@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"altclaw.ai/internal/bridge"
 	"altclaw.ai/internal/config"
 	"altclaw.ai/internal/engine"
 	"altclaw.ai/internal/executor"
@@ -24,16 +25,18 @@ const protocolVersion = "2025-03-26"
 // and {workspace}/.agent/mcp/{ns}/*.js files (sub-namespaces).
 type Server struct {
 	ws    *config.Workspace
-	store *config.Store
-	exec  executor.Executor
+	store  *config.Store
+	exec   executor.Executor
+	logBuf *bridge.LogBuffer
 }
 
 // NewServer creates a new MCP server.
-func NewServer(ws *config.Workspace, store *config.Store, exec executor.Executor) *Server {
+func NewServer(ws *config.Workspace, store *config.Store, exec executor.Executor, logBuf *bridge.LogBuffer) *Server {
 	return &Server{
-		ws:    ws,
-		store: store,
-		exec:  exec,
+		ws:     ws,
+		store:  store,
+		exec:   exec,
+		logBuf: logBuf,
 	}
 }
 
@@ -242,7 +245,7 @@ func (s *Server) toolRequirePath(namespace, toolName string) string {
 func (s *Server) executeTool(namespace, toolName string, argsJSON json.RawMessage) (string, error) {
 	handler := &mcpUI{}
 
-	eng := engine.New(s.ws, s.exec, handler, "", s.store)
+	eng := engine.New(s.ws, s.exec, handler, "", s.store, s.logBuf)
 	defer eng.Cleanup()
 
 	argsStr := "{}"

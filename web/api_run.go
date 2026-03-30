@@ -65,7 +65,7 @@ func (a *Api) RunScript(w http.ResponseWriter, r *http.Request) {
 
 	ui := &scriptRunnerUI{send: send}
 	wsModDir, userModDir := a.server.store.ModuleDirs(ws.ID)
-	eng := engine.New(ws, exec, ui, "", a.server.store).
+	eng := engine.New(ws, exec, ui, "", a.server.store, a.server.logBuf).
 		WithModuleDirs(wsModDir, userModDir)
 	envMap := map[string]string{}
 	if execType != "" {

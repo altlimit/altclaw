@@ -25,7 +25,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/hello", nil)
 	w := httptest.NewRecorder()
@@ -62,7 +62,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("POST", "/echo", strings.NewReader(`{"name":"altclaw"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -94,7 +94,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("POST", "/form", strings.NewReader("name=John+Doe&email=john%40example.com"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -129,7 +129,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("POST", "/custom", nil)
 	w := httptest.NewRecorder()
@@ -157,7 +157,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/page", nil)
 	w := httptest.NewRecorder()
@@ -187,7 +187,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/search?q=test&page=2", nil)
 	w := httptest.NewRecorder()
@@ -222,7 +222,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/readfile", nil)
 	w := httptest.NewRecorder()
@@ -249,7 +249,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "1.0.0", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "1.0.0", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/env", nil)
 	w := httptest.NewRecorder()
@@ -283,7 +283,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/redir", nil)
 	w := httptest.NewRecorder()
@@ -309,7 +309,7 @@ func TestServeHTTP_NotAFunction(t *testing.T) {
 module.exports = {not: "a function"}
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/bad", nil)
 	w := httptest.NewRecorder()
@@ -338,7 +338,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/download", nil)
 	w := httptest.NewRecorder()
@@ -365,7 +365,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("POST", "/api", strings.NewReader(`{"name":"test"}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -405,7 +405,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/plain", nil)
 	w := httptest.NewRecorder()
@@ -435,7 +435,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/autohtml", nil)
 	w := httptest.NewRecorder()
@@ -465,7 +465,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("POST", "/noop", nil)
 	w := httptest.NewRecorder()
@@ -490,7 +490,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/newresp", nil)
 	w := httptest.NewRecorder()
@@ -691,7 +691,7 @@ module.exports = function(req) {
 }
 `), 0644)
 
-	h := NewHandler(nil, workspace, publicDir, nil, nil, "test", &config.Workspace{Path: workspace})
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
 
 	req := httptest.NewRequest("GET", "/api/users/42", nil)
 	w := httptest.NewRecorder()

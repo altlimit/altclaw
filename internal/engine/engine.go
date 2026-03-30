@@ -44,6 +44,7 @@ type Engine struct {
 	// Execution context — set during Run(), used by browser bridge to cancel go-rod ops
 	execCtx    context.Context
 	execCancel context.CancelFunc
+	stopCtx    context.Context // agent-level context (cancelled by Stop, no per-block deadline)
 	ctxMu      sync.RWMutex
 
 	// Lifecycle context — tied to the Engine's lifespan
@@ -122,6 +123,32 @@ func (e *Engine) BroadcastCtx() context.Context {
 func (e *Engine) ExecContext() context.Context {
 	e.ctxMu.RLock()
 	defer e.ctxMu.RUnlock()
+	if e.execCtx != nil {
+		return e.execCtx
+	}
+	return context.Background()
+}
+
+// SetStopCtx sets the agent-level context used for sub-agent cancellation.
+// This context should be cancelled by the Stop button but should NOT carry
+// per-code-block deadlines (sub-agents manage their own timeouts).
+// Pass context.Background() to clear.
+func (e *Engine) SetStopCtx(ctx context.Context) {
+	e.ctxMu.Lock()
+	e.stopCtx = ctx
+	e.ctxMu.Unlock()
+}
+
+// StopContext returns the agent-level stop context for sub-agent spawning.
+// Returns the stop context if set and not background, otherwise falls back
+// to ExecContext, then context.Background().
+func (e *Engine) StopContext() context.Context {
+	e.ctxMu.RLock()
+	defer e.ctxMu.RUnlock()
+	// stopCtx is set to context.Background() when cleared; treat as unset
+	if e.stopCtx != nil && e.stopCtx != context.Background() {
+		return e.stopCtx
+	}
 	if e.execCtx != nil {
 		return e.execCtx
 	}
@@ -464,8 +491,11 @@ func (e *Engine) ConsoleFormat(call goja.FunctionCall) string {
 // Called after construction to break the circular dependency between Agent and Engine.
 // The engine itself is passed as the DeadlinePauser so agent.result() can
 // pause/resume the execution deadline while waiting for sub-agents.
+// StopContext is passed for sub-agent spawning (inherits Stop cancellation but
+// not per-block deadlines). ExecContext is still used by agent.result() for
+// detecting per-block timeouts.
 func (e *Engine) SetAgentRunner(runner bridge.SubAgentRunner) {
-	bridge.RegisterAgent(e.vm, runner, e.engineCtx, e)
+	bridge.RegisterAgent(e.vm, runner, e.StopContext, e)
 }
 
 // SetConfirmContext registers ui.confirm on the VM with a server-side execution context.

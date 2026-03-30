@@ -34,9 +34,15 @@ type subAgentHandle struct {
 	cancel context.CancelFunc
 }
 
+// ExecCtxFunc returns the current execution context. Sub-agents derive their
+// context from this so they inherit the parent's cancellation (e.g. user Stop).
+type ExecCtxFunc func() context.Context
+
 // RegisterAgent adds the agent namespace (agent.run, agent.result) to the runtime.
+// execCtxFn returns the current execution context; sub-agents derive from it so
+// they get cancelled when the parent agent is stopped.
 // pauser is optional — if provided, agent.result() will pause/resume the deadline.
-func RegisterAgent(vm *goja.Runtime, runner SubAgentRunner, ctx context.Context, pauser DeadlinePauser) {
+func RegisterAgent(vm *goja.Runtime, runner SubAgentRunner, execCtxFn ExecCtxFunc, pauser DeadlinePauser) {
 	agentObj := vm.NewObject()
 
 	var mu sync.Mutex
@@ -55,7 +61,10 @@ func RegisterAgent(vm *goja.Runtime, runner SubAgentRunner, ctx context.Context,
 			providerName = call.Arguments[1].String()
 		}
 
-		subCtx, cancel := context.WithCancel(ctx)
+		// Derive from the current execution context so sub-agents are cancelled
+		// when the parent agent is stopped by the user.
+		parentCtx := execCtxFn()
+		subCtx, cancel := context.WithCancel(parentCtx)
 		handle := &subAgentHandle{
 			done:   make(chan struct{}),
 			cancel: cancel,
@@ -118,7 +127,7 @@ func RegisterAgent(vm *goja.Runtime, runner SubAgentRunner, ctx context.Context,
 		}
 
 		// Pause parent deadline while waiting for sub-agent
-		var execCtx context.Context = ctx
+		execCtx := execCtxFn()
 		if pauser != nil {
 			pauser.PauseDeadline()
 			if ep, ok := pauser.(interface{ ExecContext() context.Context }); ok {

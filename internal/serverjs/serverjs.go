@@ -38,6 +38,7 @@ type Handler struct {
 	Version   string
 	Timeout   time.Duration
 	ExecType  string // resolved executor type (e.g. "docker", "podman", "local")
+	LogBuf    *bridge.LogBuffer
 
 	// AgentRunner is optional — if set, the agent bridge is registered.
 	AgentRunner bridge.SubAgentRunner
@@ -119,13 +120,14 @@ func (c *routeCache) touch(key string) {
 }
 
 // NewHandler creates a new server-side JS handler.
-func NewHandler(store *config.Store, workspace, publicDir string, exec executor.Executor, cronMgr *cron.Manager, version string, ws *config.Workspace) *Handler {
+func NewHandler(store *config.Store, workspace, publicDir string, exec executor.Executor, cronMgr *cron.Manager, logBuf *bridge.LogBuffer, version string, ws *config.Workspace) *Handler {
 	return &Handler{
 		Store:     store,
 		Workspace: workspace,
 		PublicDir: publicDir,
 		Exec:      exec,
 		CronMgr:   cronMgr,
+		LogBuf:    logBuf,
 		Version:   version,
 		Timeout:   ws.TimeoutFor("serverjs"),
 		chats:     make(map[string]int64),
@@ -697,7 +699,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, scriptPath, 
 // createEngine creates a fresh engine with all bridges registered.
 func (h *Handler) createEngine() *engine.Engine {
 	ui := &serverUI{}
-	eng := engine.New(h.Ws, h.Exec, ui, "", h.Store).
+	eng := engine.New(h.Ws, h.Exec, ui, "", h.Store, h.LogBuf).
 		WithCronManager(h.CronMgr, func() int64 { return 0 })
 	if h.OnBroadcast != nil {
 		eng.OnBroadcast = h.OnBroadcast

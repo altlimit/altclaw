@@ -636,7 +636,7 @@ func startWeb(store *config.Store, workspace, addr string) error {
 		}
 
 		if pubDir != "" {
-			sjsHandler := serverjs.NewHandler(store, workspace, pubDir, exec, cronMgr, buildinfo.Version, ws)
+			sjsHandler := serverjs.NewHandler(store, workspace, pubDir, exec, cronMgr, logBuf, buildinfo.Version, ws)
 			sjsHandler.ExecType = activeExecType
 			sjsHandler.OnBroadcast = srv.BroadcastPanel
 			if ag != nil {
@@ -647,7 +647,7 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	}
 
 	// Wire MCP server
-	mcpSrv := mcp.NewServer(ws, store, exec)
+	mcpSrv := mcp.NewServer(ws, store, exec, logBuf)
 	srv.SetMCP(mcpSrv)
 
 	// Verbose mode: plain stdout logging, no TUI

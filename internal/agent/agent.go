@@ -510,10 +510,15 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 	resultCache := make(map[uint64]seenResult)
 	var ledgerEntries []string
 
+	// Set the agent-level stop context on the engine so sub-agents spawned
+	// via agent.run() inherit Stop cancellation without per-block deadlines.
+	a.Engine.SetStopCtx(ctx)
+	defer a.Engine.SetStopCtx(context.Background())
+
 	for i := 0; i < a.MaxIter; i++ {
 		// Check for cancellation at the start of each iteration
 		if ctx.Err() != nil {
-			return "", fmt.Errorf("stopped")
+			return a.handleStop(totalTurnTokens)
 		}
 
 		// Drain any user messages sent mid-execution
@@ -623,7 +628,7 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 			}
 			if ctx.Err() != nil {
 				apiCancel()
-				return "", fmt.Errorf("stopped")
+				return a.handleStop(totalTurnTokens)
 			}
 			if attempt < maxRetries {
 				backoff := time.Duration(attempt) * 2 * time.Second
@@ -631,7 +636,15 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 				if a.OnLog != nil {
 					a.OnLog(fmt.Sprintf("⚠️ Provider error, retrying in %s... (attempt %d/%d)", backoff, attempt, maxRetries))
 				}
-				time.Sleep(backoff)
+				// Context-aware sleep so cancellation interrupts the backoff
+				timer := time.NewTimer(backoff)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					apiCancel()
+					return a.handleStop(totalTurnTokens)
+				case <-timer.C:
+				}
 				// Reset stream state for retry
 				if a.OnChunk != nil {
 					a.OnChunk("\n") // signal client to discard partial
@@ -644,7 +657,7 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 
 		if err != nil {
 			if ctx.Err() != nil {
-				return "", fmt.Errorf("stopped")
+				return a.handleStop(totalTurnTokens)
 			}
 			return "", fmt.Errorf("ai provider error: %w", sanitizeProviderError(err))
 		}
@@ -685,6 +698,11 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 		// Execute each code block
 		var execResults []string
 		for j, code := range codeBlocks {
+			// Check for cancellation before each code block
+			if ctx.Err() != nil {
+				return a.handleStop(totalTurnTokens)
+			}
+
 			// Save to history for debugging (includes AI response)
 			histID := a.saveToHistory(ctx, code, response, i, j)
 
@@ -763,6 +781,12 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 					fmt.Sprintf("%s: %s → %d chars\n  %s",
 						label, action, len(resultStr), preview))
 			}
+		}
+
+		// Check for cancellation after executing code blocks, before building the
+		// next iteration's feedback message and calling the provider again.
+		if ctx.Err() != nil {
+			return a.handleStop(totalTurnTokens)
 		}
 
 		// done() no longer terminates — results are always fed back to the AI.
@@ -887,6 +911,22 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 	maxIterMsg := "Maximum execution iterations reached. Please try a simpler request."
 	a.persistMessage(ctx, "assistant", maxIterMsg, totalTurnTokens)
 	return maxIterMsg, nil
+}
+
+// handleStop gracefully terminates the agent on user-initiated cancellation.
+// Persists a "Stopped by user." assistant message (with accumulated token counts)
+// so the partial work and execution logs are preserved in chat history, just like
+// the max-iteration case. Uses context.Background() because the agent context is
+// already cancelled at this point.
+func (a *Agent) handleStop(totalTurnTokens provider.TokenCounts) (string, error) {
+	stoppedMsg := "Stopped by user."
+	a.compactMessages()
+	a.autoCommitGit()
+	if a.isSubAgent {
+		return "", fmt.Errorf("stopped")
+	}
+	a.persistMessage(context.Background(), "assistant", stoppedMsg, totalTurnTokens)
+	return stoppedMsg, nil
 }
 
 // autoCommitGit snapshots the workspace into the agent's git history repo.
