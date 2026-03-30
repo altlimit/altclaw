@@ -459,10 +459,18 @@ func (d *Docker) spawnContainer(ctx context.Context, image string) (string, erro
 		"--name", name,
 	}
 	// Map container user to host UID/GID so files on the bind mount
-	// are owned by the current user, not root.  os.Getuid returns -1
-	// on Windows where Docker Desktop handles ownership via its VM.
+	// are owned by the current user, not root.
+	// Podman rootless uses --userns=keep-id which maps the host UID
+	// directly, avoiding the UID remapping that makes bind mounts
+	// appear root-owned.  Docker uses --user UID:GID instead.
+	// os.Getuid returns -1 on Windows where Docker Desktop handles
+	// ownership via its VM.
 	if uid := os.Getuid(); uid >= 0 {
-		args = append(args, "--user", fmt.Sprintf("%d:%d", uid, os.Getgid()))
+		if d.cli == "podman" {
+			args = append(args, "--userns=keep-id")
+		} else {
+			args = append(args, "--user", fmt.Sprintf("%d:%d", uid, os.Getgid()))
+		}
 	}
 	args = append(args,
 		"--network", d.networkName,
