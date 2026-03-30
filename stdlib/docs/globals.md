@@ -64,5 +64,5 @@ Use `doc.read("name")` for the full API of any individual module.
 - **pkg** — Auto-install system packages: `var pkg = require("pkg"); pkg("curl", "git");`
 - **servertest** — Server endpoint tester: `var st = require("servertest"); st.post("public/api.server.js", data);`
 - **mcp** — MCP client for external tool servers. See `doc.read("mcp")`.
-- **mcpserver** — Expose tools as MCP server via .altclaw/mcp/ files. See `doc.read("mcpserver")`.
+- **mcpserver** — Expose tools as MCP server via .agent/mcp/ files. See `doc.read("mcpserver")`.
 - **server** — Dynamic JS endpoints from `public/*.server.js`. See `doc.read("server")`.

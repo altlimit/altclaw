@@ -20,7 +20,8 @@ import (
 const protocolVersion = "2025-03-26"
 
 // Server implements the MCP server protocol.
-// Tools are loaded from {workspace}/.altclaw/mcp/*.js files.
+// Tools are loaded from {workspace}/.agent/mcp/*.js files (root namespace)
+// and {workspace}/.agent/mcp/{ns}/*.js files (sub-namespaces).
 type Server struct {
 	ws    *config.Workspace
 	store *config.Store
@@ -36,8 +37,70 @@ func NewServer(ws *config.Workspace, store *config.Store, exec executor.Executor
 	}
 }
 
+// HasTools returns true if there are any tools in the given namespace.
+// Empty namespace checks the root .agent/mcp/*.js directory.
+func (s *Server) HasTools(namespace string) bool {
+	return len(s.scanTools(namespace)) > 0
+}
+
+// HasAnyTools returns true if there are tools in any namespace (root or sub).
+func (s *Server) HasAnyTools() bool {
+	if s.HasTools("") {
+		return true
+	}
+	return len(s.ListNamespaces()) > 0
+}
+
+// ListNamespaces returns subdirectory names under .agent/mcp/ that contain
+// at least one .js tool file. Does not include the root namespace.
+func (s *Server) ListNamespaces() []string {
+	mcpDir := filepath.Join(s.ws.Path, ".agent", "mcp")
+	entries, err := os.ReadDir(mcpDir)
+	if err != nil {
+		return nil
+	}
+
+	var namespaces []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// Check if the subdirectory has any .js files
+		subEntries, err := os.ReadDir(filepath.Join(mcpDir, e.Name()))
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if !se.IsDir() && strings.HasSuffix(se.Name(), ".js") {
+				namespaces = append(namespaces, e.Name())
+				break
+			}
+		}
+	}
+	return namespaces
+}
+
+// Manifest holds metadata from a mcp.json file in a tool directory.
+type Manifest struct {
+	Description string `json:"description,omitempty"`
+}
+
+// ReadManifest reads the manifest.json file from the given namespace's tool directory.
+// Returns an empty Manifest if the file doesn't exist or is invalid.
+func (s *Server) ReadManifest(namespace string) Manifest {
+	data, err := os.ReadFile(filepath.Join(s.toolDir(namespace), "manifest.json"))
+	if err != nil {
+		return Manifest{}
+	}
+	var m Manifest
+	json.Unmarshal(data, &m)
+	return m
+}
+
 // HandleRequest processes a JSON-RPC 2.0 request and returns a response.
-func (s *Server) HandleRequest(data []byte) []byte {
+// The namespace parameter selects which tool directory to use:
+// "" for root (.agent/mcp/*.js), "calculator" for .agent/mcp/calculator/*.js.
+func (s *Server) HandleRequest(data []byte, namespace string) []byte {
 	req, err := parseRequest(data)
 	if err != nil {
 		resp, _ := json.Marshal(newError(nil, CodeParseError, "Parse error"))
@@ -52,16 +115,16 @@ func (s *Server) HandleRequest(data []byte) []byte {
 	var response *Response
 	switch req.Method {
 	case "initialize":
-		response = s.handleInitialize(req)
+		response = s.handleInitialize(req, namespace)
 	case "notifications/initialized":
 		// Client acknowledgement — no response needed for notifications
 		return nil
 	case "ping":
 		response = newResponse(req.ID, map[string]any{})
 	case "tools/list":
-		response = s.handleToolsList(req)
+		response = s.handleToolsList(req, namespace)
 	case "tools/call":
-		response = s.handleToolsCall(req)
+		response = s.handleToolsCall(req, namespace)
 	default:
 		response = newError(req.ID, CodeMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method))
 	}
@@ -71,14 +134,18 @@ func (s *Server) HandleRequest(data []byte) []byte {
 }
 
 // handleInitialize processes the initialize request.
-func (s *Server) handleInitialize(req *Request) *Response {
+func (s *Server) handleInitialize(req *Request, namespace string) *Response {
+	name := "altclaw"
+	if namespace != "" {
+		name = "altclaw/" + namespace
+	}
 	return newResponse(req.ID, map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities": map[string]any{
 			"tools": map[string]any{},
 		},
 		"serverInfo": map[string]any{
-			"name":    "altclaw",
+			"name":    name,
 			"version": "0.1.0",
 		},
 	})
@@ -91,16 +158,16 @@ type ToolDef struct {
 	InputSchema any    `json:"inputSchema"`
 }
 
-// handleToolsList returns the list of available tools from .altclaw/mcp/*.js.
-func (s *Server) handleToolsList(req *Request) *Response {
-	tools := s.scanTools()
+// handleToolsList returns the list of available tools for the given namespace.
+func (s *Server) handleToolsList(req *Request, namespace string) *Response {
+	tools := s.scanTools(namespace)
 	return newResponse(req.ID, map[string]any{
 		"tools": tools,
 	})
 }
 
-// handleToolsCall executes a tool by loading and running the corresponding .altclaw/mcp/*.js file.
-func (s *Server) handleToolsCall(req *Request) *Response {
+// handleToolsCall executes a tool from the given namespace.
+func (s *Server) handleToolsCall(req *Request, namespace string) *Response {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments,omitempty"`
@@ -114,10 +181,10 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	}
 
 	// Verify the tool file exists
-	toolDir := filepath.Join(s.ws.Path, ".altclaw", "mcp")
+	toolDir := s.toolDir(namespace)
 	toolFile := filepath.Join(toolDir, params.Name+".js")
 
-	// Security: ensure the resolved path is inside .altclaw/mcp/
+	// Security: ensure the resolved path is inside the tool directory
 	realToolDir, _ := filepath.EvalSymlinks(toolDir)
 	realToolFile, err := filepath.EvalSymlinks(toolFile)
 	if err != nil {
@@ -136,9 +203,9 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	}
 
 	// Execute the tool via RunModule
-	result, execErr := s.executeTool(params.Name, params.Arguments)
+	result, execErr := s.executeTool(namespace, params.Name, params.Arguments)
 	if execErr != nil {
-		slog.Error("mcp tool error", "tool", params.Name, "error", execErr)
+		slog.Error("mcp tool error", "tool", params.Name, "namespace", namespace, "error", execErr)
 		return newResponse(req.ID, map[string]any{
 			"content": []map[string]any{
 				{"type": "text", "text": fmt.Sprintf("Error: %v", execErr)},
@@ -154,9 +221,25 @@ func (s *Server) handleToolsCall(req *Request) *Response {
 	})
 }
 
-// executeTool loads a .altclaw/mcp/*.js file via require() and calls it with the given arguments.
+// toolDir returns the absolute path to the tool directory for the given namespace.
+func (s *Server) toolDir(namespace string) string {
+	if namespace == "" {
+		return filepath.Join(s.ws.Path, ".agent", "mcp")
+	}
+	return filepath.Join(s.ws.Path, ".agent", "mcp", namespace)
+}
+
+// toolRequirePath returns the require() path for a tool in the given namespace.
+func (s *Server) toolRequirePath(namespace, toolName string) string {
+	if namespace == "" {
+		return fmt.Sprintf("./.agent/mcp/%s.js", toolName)
+	}
+	return fmt.Sprintf("./.agent/mcp/%s/%s.js", namespace, toolName)
+}
+
+// executeTool loads a tool .js file via require() and calls it with the given arguments.
 // Uses RunModule for consistent CommonJS handling.
-func (s *Server) executeTool(toolName string, argsJSON json.RawMessage) (string, error) {
+func (s *Server) executeTool(namespace, toolName string, argsJSON json.RawMessage) (string, error) {
 	handler := &mcpUI{}
 
 	eng := engine.New(s.ws, s.exec, handler, "", s.store)
@@ -167,17 +250,19 @@ func (s *Server) executeTool(toolName string, argsJSON json.RawMessage) (string,
 		argsStr = string(argsJSON)
 	}
 
+	requirePath := s.toolRequirePath(namespace, toolName)
+
 	// Inline module that requires the tool and calls it with params.
 	// RunModule handles the CommonJS wrapping and calls module.exports if it's a function.
 	code := fmt.Sprintf(`var __params = %s;
-var __fn = require('./.altclaw/mcp/%s.js');
+var __fn = require('%s');
 module.exports = function() {
   if (typeof __fn === 'function') {
     var r = __fn(__params);
     return typeof r === 'object' ? JSON.stringify(r) : String(r || '');
   }
   return '';
-};`, argsStr, toolName)
+};`, argsStr, requirePath)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -193,9 +278,9 @@ module.exports = function() {
 var metaPattern = regexp.MustCompile(`@(\w+)\s+([^@*/]+)`)
 var schemaPattern = regexp.MustCompile(`(?m)^//\s*inputSchema:\s*(.+)$`)
 
-// scanTools reads .altclaw/mcp/*.js and returns tool definitions.
-func (s *Server) scanTools() []ToolDef {
-	toolDir := filepath.Join(s.ws.Path, ".altclaw", "mcp")
+// scanTools reads *.js files from the tool directory for the given namespace.
+func (s *Server) scanTools(namespace string) []ToolDef {
+	toolDir := s.toolDir(namespace)
 	entries, err := os.ReadDir(toolDir)
 	if err != nil {
 		return nil

@@ -20,7 +20,7 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
   privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
 });
 
-fs.write(".altclaw/ssh/id_ed25519", privateKey);
-fs.write(".altclaw/ssh/id_ed25519.pub", publicKey);
+fs.write(".agent/ssh/id_ed25519", privateKey);
+fs.write(".agent/ssh/id_ed25519.pub", publicKey);
 output("Keys saved successfully!");
 ```

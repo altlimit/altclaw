@@ -1,5 +1,5 @@
 // Package mcp implements an MCP (Model Context Protocol) server
-// that exposes .altclaw/mcp/*.js files as tools via JSON-RPC 2.0.
+// that exposes .agent/mcp/*.js files as tools via JSON-RPC 2.0.
 package mcp
 
 import "encoding/json"

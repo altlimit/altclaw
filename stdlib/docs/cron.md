@@ -5,7 +5,7 @@
     Durations and datetimes run once then auto-remove. Cron expressions repeat on schedule.
   - content: Instructions for AI, OR script content if opts.script=true.
   - opts.script: If true, content must be a .js filepath OR inline module.exports code.
-    Example (File): cron.add('5m', '.altclaw/task.js', {script: true})
+    Example (File): cron.add('5m', '.agent/task.js', {script: true})
     Example (Inline): cron.add('5m', 'module.exports = function() { ui.log("hi"); }', {script: true})
 
 * cron.rm(id: string) → void

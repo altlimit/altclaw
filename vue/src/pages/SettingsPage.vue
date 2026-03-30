@@ -265,7 +265,7 @@ onMounted(async () => {
               <input v-model.number="ws.log_max_files" type="number" min="1" placeholder="3" />
             </div>
           </div>
-          <label v-if="pushSupported" class="toggle-row" @click.prevent>
+          <label v-if="pushSupported" class="toggle-row">
             <input type="checkbox" :checked="pushEnabled" @change="togglePush" :disabled="pushBusy" />
             Push Notifications
           </label>

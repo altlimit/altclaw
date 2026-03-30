@@ -62,7 +62,7 @@ internal/
     secret.go              → OS-native encryption key management
     store_settings.go      → Typed settings accessors (rate limits, token caps, message window, etc.)
   serverjs/serverjs.go     → Server-side JS handler for .server.js endpoints in public dirs
-  mcp/                     → MCP server: JSON-RPC 2.0 handler, .mcp/ tool scanner
+  mcp/                     → MCP server: JSON-RPC 2.0 handler, .agent/mcp/ tool scanner
   cron/                    → Cron scheduler: script mode (Goja) and AI task mode (agent.Send)
   tunnel/                  → Relay tunnel client using yamux multiplexing
   netx/                    → Loopback port management and SSRF IP filtering
@@ -222,8 +222,8 @@ GOOS=linux GOARCH=arm64 go build -o altclaw-linux-arm64 ./cmd/altclaw/
 - History entries are identified by a per-turn `TurnID` (hex nanosecond timestamp).
 
 ### Module System
-- Workspace modules: `{workspace}/.altclaw/modules/{slug}/index.js`
-- User modules: `{configDir}/modules/{slug}/index.js`
+- User modules: `{configDir}/modules/{slug}/index.js` (stored in user config directory)
+- Workspace modules: `{configDir}/{workspaceID}/modules/{slug}/index.js` (stored in user config directory)
 - Stdlib modules: embedded in binary via `go:embed` in `stdlib/stdlib.go`
 - Bridge shims: `require("fs")` returns the global `fs` object (no file I/O, just `module.exports = fs;`)
 

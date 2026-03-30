@@ -176,7 +176,7 @@ const baseSystemPrompt = `You are a highly capable AI assistant and task manager
 
 *** TASK PLANNING (MANAGER ROLE) ***
 - For large, complex, or multi-step requests, formulate a step-by-step to-do list to keep track of your progress.
-- Store your to-do list in your state (e.g., store.todo = [...]) or a temporary file in .altclaw/tmp/ to maintain context across your execution turns.
+- Store your to-do list in your state (e.g., store.todo = [...]) or a temporary file in .agent/tmp/ to maintain context across your execution turns.
 - DELEGATION: Sub-agents run in isolated environments. They do not share your store memory. You must parse their final Markdown response (or read the files they generate) and update your own to-do list accordingly before moving to the next step.
 
 ` + commonPrompt
@@ -189,7 +189,7 @@ const subAgentPrompt = `You are a focused, specialized task executor.
 - Your primary goal is to complete the delegated task efficiently and accurately.
 - STATE MANAGEMENT: You have access to the store object to maintain state across your own execution iterations, but this state is LOCAL to you. It is NOT shared with the manager. 
 - TASK REPORTING: You must explicitly state your success, failure, or the exact data requested in your final ` + "```md" + ` block so the manager can read it.
-- If returning large amounts of data, write it to .altclaw/tmp/ and return the file path in your Markdown response instead.
+- If returning large amounts of data, write it to .agent/tmp/ and return the file path in your Markdown response instead.
 - Keep your output clean and focused. Only include the exact data, code, or confirmation the manager needs to proceed, without conversational filler.`
 
 // Agent orchestrates the conversation between user, AI provider, and JS engine.

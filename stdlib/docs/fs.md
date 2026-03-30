@@ -10,7 +10,7 @@
 * fs.stat(path) → {size: number, isDir: boolean, modified: number (unix timestamp)}
 
 [ Search ]
-* fs.search(query) → string[] (Full-text + glob search, e.g., "**/*.js". Skips dot-prefixed dirs like .altclaw/ — use fs.list for those)
+* fs.search(query) → string[] (Full-text + glob search, e.g., "**/*.js". Skips dot-prefixed dirs like .agent/ — use fs.list for those)
 * fs.find(dir, pattern) → string[] (Recursive filename glob, e.g. fs.find('.', '*.go'). No content search)
 * fs.grep(path, pattern) → [{line: string, num: number}] (Substring search within a file)
 * fs.grep(path, pattern, {regex: true}) → [{line, num}] (Regex search within a file)

@@ -152,10 +152,10 @@ Configuration is stored in `~/.altclaw/` (SQLite via [dsorm](https://github.com/
 
 ### MCP Server — Expose Custom Tools
 
-Create JS files in `{workspace}/.altclaw/mcp/` to expose them as MCP tools:
+Create JS files in `{workspace}/.agent/mcp/` to expose them as MCP tools:
 
 ```js
-// .altclaw/mcp/read_file.js
+// .agent/mcp/read_file.js
 /** @name read_file @description Read a workspace file */
 // inputSchema: {"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}
 module.exports = function(params) {
@@ -214,7 +214,7 @@ internal/
   executor/           Execution backends — Docker/Podman (session-isolated) and local
   config/             SQLite store (dsorm), workspace/chat/history models, settings
   serverjs/           Server-side JS handler for .server.js endpoints
-  mcp/                MCP server (JSON-RPC 2.0, .mcp/ tool scanner)
+  mcp/                MCP server (JSON-RPC 2.0, .agent/mcp/ tool scanner)
   cron/               Cron scheduler with script and AI task modes
   tunnel/             Relay tunnel client (yamux multiplexing)
   netx/               Loopback port management and SSRF protection

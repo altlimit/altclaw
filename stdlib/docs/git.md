@@ -15,3 +15,7 @@ Auto-snapshots workspace after every agent turn. History stored separately from 
 
 [ Maintenance ]
 * git.compact(n?) → string (Keep only last N commits, default 50. Min 5)
+
+[ Workspace .git ]
+This module manages Altclaw's internal version history — NOT the workspace's own .git repository.
+To interact with the workspace's .git (e.g., commit, push, branch, checkout), use `sys.call("git", [...])` instead.
