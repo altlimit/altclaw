@@ -124,6 +124,9 @@ func RegisterSys(vm *goja.Runtime, exec executor.Executor, store *config.Store, 
 	// guardRestricted performs a best-effort check on command + args for hidden-path tokens.
 	// Scans each token's path segments for leading dots (e.g. .env, .ssh, .git).
 	guardRestricted := func(cmd string, args []string) {
+		if !isLocal {
+			return
+		}
 		if ws == nil || uiHandler == nil {
 			return
 		}

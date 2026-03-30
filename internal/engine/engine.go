@@ -381,7 +381,7 @@ func New(ws *config.Workspace, exec executor.Executor, uiHandler bridge.UIHandle
 	bridge.RegisterFetch(vm, store, ws.Path, broadcastCtx)
 	bridge.RegisterFS(vm, ws.Path, ws, uiHandler, store)
 	bridge.RegisterCSV(vm, ws.Path)
-	bridge.RegisterDoc(vm, eng.moduleDirs, func(name string) string {
+	bridge.RegisterDoc(vm, func() []string { return eng.moduleDirs }, func(name string) string {
 		if eng.dynamicDoc != nil {
 			return eng.dynamicDoc(name)
 		}

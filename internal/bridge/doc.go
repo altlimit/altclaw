@@ -15,9 +15,9 @@ import (
 type DynamicDocFunc func(name string) string
 
 // RegisterDoc adds the doc namespace (doc.read, doc.find, doc.list, doc.all) to the runtime.
-// moduleDirs is the ordered list of module directories to search (workspace first, user second).
+// moduleDirsFn is a lazy accessor for module directories (may be populated after construction).
 // dynamicDoc is optional — if non-nil, it's checked before user modules for dynamic docs.
-func RegisterDoc(vm *goja.Runtime, moduleDirs []string, dynamicDoc DynamicDocFunc) {
+func RegisterDoc(vm *goja.Runtime, moduleDirsFn func() []string, dynamicDoc DynamicDocFunc) {
 	obj := vm.NewObject()
 
 	// Per-turn cache: prevents redundant doc.read calls within the same
@@ -85,7 +85,7 @@ func RegisterDoc(vm *goja.Runtime, moduleDirs []string, dynamicDoc DynamicDocFun
 
 			// 4. User module README.md or JSDoc (searched in moduleDirs order)
 			if len(parts) == 0 {
-				for _, baseDir := range moduleDirs {
+				for _, baseDir := range moduleDirsFn() {
 					if content := readModuleDoc(baseDir, name); content != "" {
 						parts = append(parts, "=== "+name+" ===\n"+content+"\n=== end ===")
 						break
@@ -145,7 +145,7 @@ func RegisterDoc(vm *goja.Runtime, moduleDirs []string, dynamicDoc DynamicDocFun
 
 		// Search user modules by ID keyword match
 		queryLow := strings.ToLower(query)
-		for _, baseDir := range moduleDirs {
+		for _, baseDir := range moduleDirsFn() {
 			entries := listModuleIDs(baseDir)
 			for _, id := range entries {
 				if strings.Contains(strings.ToLower(id), queryLow) {
@@ -198,7 +198,7 @@ func RegisterDoc(vm *goja.Runtime, moduleDirs []string, dynamicDoc DynamicDocFun
 		}
 
 		// 4. User modules from filesystem (workspace first, then user)
-		for _, baseDir := range moduleDirs {
+		for _, baseDir := range moduleDirsFn() {
 			for _, id := range listModuleIDs(baseDir) {
 				if seen[id] {
 					continue
