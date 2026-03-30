@@ -403,6 +403,13 @@ func (s *Server) Auth_AutoLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // startFileWatcher creates a single fsnotify watcher and broadcasts file events via the hub.
+// watcherAlwaysSkip are directory names that are always excluded from watching regardless
+// of .gitignore — they are universally large, noisy, or internal to version control.
+var watcherAlwaysSkip = map[string]bool{
+	".git": true, ".svn": true, ".hg": true,
+	"node_modules": true,
+}
+
 func (s *Server) startFileWatcher() {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -411,15 +418,33 @@ func (s *Server) startFileWatcher() {
 	}
 
 	ws := s.store.Workspace()
-	_ = filepath.WalkDir(ws.Path, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
+
+	shouldSkip := func(absPath string) bool {
+		name := filepath.Base(absPath)
+		if watcherAlwaysSkip[name] {
+			return true
+		}
+		return bridge.IsIgnored(ws.Path, absPath)
+	}
+
+	// Run the initial directory walk in the background so large workspaces
+	// don't block server startup. The event loop handles events as dirs are added.
+	go func() {
+		_ = filepath.WalkDir(ws.Path, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if path != ws.Path && shouldSkip(path) {
+					return filepath.SkipDir
+				}
+				watcher.Add(path)
+			}
 			return nil
-		}
-		if d.IsDir() && !strings.HasPrefix(d.Name(), ".") {
-			watcher.Add(path)
-		}
-		return nil
-	})
+		})
+		slog.Info("file watcher ready", "workspace", ws.Path)
+	}()
+
 	go func() {
 		for {
 			select {
@@ -433,7 +458,7 @@ func (s *Server) startFileWatcher() {
 				}
 				switch {
 				case event.Has(fsnotify.Create):
-					if info, err := os.Stat(event.Name); err == nil && info.IsDir() && !strings.HasPrefix(filepath.Base(event.Name), ".") {
+					if info, err := os.Stat(event.Name); err == nil && info.IsDir() && !shouldSkip(event.Name) {
 						watcher.Add(event.Name)
 					}
 					data, _ := json.Marshal(map[string]string{"type": "file_created", "path": rel})

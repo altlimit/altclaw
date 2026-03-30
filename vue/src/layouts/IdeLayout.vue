@@ -548,7 +548,7 @@ function getLanguage(path: string | null) {
       <MemoryPanel v-if="currentActivity === 'memory'" />
       <SecretPanel v-if="currentActivity === 'secrets'" />
       <ProvidersPanel ref="providersPanelRef" v-if="currentActivity === 'providers'" />
-      <GitPanel v-if="currentActivity === 'git'" @open-diff="(data: any) => editorStore.openDiffTab(data.path, data.path.split('/').pop() || data.path, data.old_content, data.new_content)" />
+      <GitPanel v-if="currentActivity === 'git'" @open-diff="(data: any) => editorStore.openDiffTab(data.path, data.path.split('/').pop() || data.path, data.old_content, data.new_content)" @file-restored="(path: string) => editorStore.forceRefreshFile(path)" />
       <div v-show="currentActivity === 'chats'" class="chats-sidebar">
         <div class="chats-header">
           <span class="chats-title">Chats</span>

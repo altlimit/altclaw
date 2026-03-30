@@ -27,8 +27,20 @@ const editorOptions = {
 }
 
 const editorRef = shallowRef()
+let _internalChange = false
 
 const { monacoRef } = useMonaco()
+
+// Sync external value changes (e.g. disk updates, restore) into the editor.
+// VueMonacoEditor doesn't always reflect :value prop changes after mount,
+// so we manually call setValue when the prop changes externally.
+watch(() => props.modelValue, (newVal) => {
+  if (_internalChange) return
+  const editor = editorRef.value
+  if (editor && editor.getValue() !== newVal) {
+    editor.setValue(newVal)
+  }
+})
 
 function handleMount(editor: any) {
   editorRef.value = editor
@@ -53,7 +65,9 @@ function handleMount(editor: any) {
 }
 
 function handleChange(value: string | undefined) {
+  _internalChange = true
   emit('update:modelValue', value || '')
+  _internalChange = false
 }
 
 </script>

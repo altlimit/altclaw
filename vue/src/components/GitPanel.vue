@@ -30,6 +30,7 @@ const hasMore = ref(false)
 
 const emit = defineEmits<{
   (e: 'open-diff', data: DiffResult): void
+  (e: 'file-restored', path: string): void
 }>()
 
 async function loadHistory(append = false) {
@@ -86,6 +87,8 @@ async function restoreFile(commit: CommitEntry, file: DiffFile) {
     if (resp.ok) {
       restoreStatus.value = `✓ Restored ${file.path}`
       setTimeout(() => restoreStatus.value = '', 3000)
+      // Explicitly refresh the editor if this file is open
+      emit('file-restored', file.path)
     }
   } catch { /* ignore */ }
 }
@@ -97,6 +100,12 @@ async function restoreCommit(commit: CommitEntry) {
     if (resp.ok) {
       restoreStatus.value = `✓ Restored workspace to ${commit.hash}`
       setTimeout(() => restoreStatus.value = '', 3000)
+      // Refresh all files from the restored commit
+      if (commit.files) {
+        for (const f of commit.files) {
+          emit('file-restored', f.path)
+        }
+      }
     }
   } catch { /* ignore */ }
 }

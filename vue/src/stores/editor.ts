@@ -383,7 +383,8 @@ export const useEditorStore = defineStore('editor', () => {
 
   // Handle SSE file changes from the backend
   const handleDiskChange = async (path: string) => {
-    if (findTab(path)) {
+    const tab = findTab(path)
+    if (tab && !tab.isDirty) {
       try {
         const resp = await fetch('/api/files?path=' + encodeURIComponent(path))
         if (resp.ok) {
@@ -395,6 +396,22 @@ export const useEditorStore = defineStore('editor', () => {
       }
     }
   }
+
+  // Force-refresh a file from disk, even if dirty (used after explicit restore).
+  const forceRefreshFile = async (path: string) => {
+    if (findTab(path)) {
+      try {
+        const resp = await fetch('/api/files?path=' + encodeURIComponent(path))
+        if (resp.ok) {
+          const data = await resp.json()
+          updateContent(path, data.content || '', true)
+        }
+      } catch (e) {
+        console.error("Failed to refresh file from disk:", e)
+      }
+    }
+  }
+
 
   // ── Tab persistence ─────────────────────────────────────────────────
   const debounceSaveTabs = () => {
@@ -470,6 +487,7 @@ export const useEditorStore = defineStore('editor', () => {
     updateContent,
     saveActiveFile,
     handleDiskChange,
+    forceRefreshFile,
     saveTabs,
     loadTabs
   }
