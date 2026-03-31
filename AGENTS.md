@@ -31,7 +31,7 @@ internal/
     git.go                 → git.clone/commit/push/diff/log/branch — full git operations
     mail.go                → mail.connect/list/read/flag/move/send — IMAP + SMTP
     ssh.go                 → ssh.connect/exec — remote command execution
-    mem.go                 → mem.set/get (workspace), mem.setUser/getUser (global) — persistent memory
+    mem.go                 → mem.add/recent/core/all/search/rm/promote — persistent memory with scope
     secret.go              → secret.set/get/delete — OS-native keyring storage (Keychain, wincred, libsecret)
     cache.go               → cache.set/get/delete — in-process key-value cache with TTL
     cron.go                → cron.add/rm/list — scheduled tasks/scripts
@@ -46,26 +46,29 @@ internal/
     img.go                 → img.resize/crop/convert — image manipulation
     log.go                 → log.search/tail — in-memory slog ring buffer
     chat.go                → chat.list/read — cross-conversation access
+    proxy.go               → Internal proxy helpers for executor port forwarding
+    path.go                → Workspace-relative path utilities
     pool.go                → Connection pooling for task child VMs
     registry.go            → Bridge registration metadata (BuiltinNames)
     pathcheck.go           → Symlink-aware path jailing (SanitizePath)
     util.go                → Stringify, parameter validation helpers
   executor/                → Command execution backends:
     executor.go            → Interface: Run, Spawn, GetOutput, Terminate, SetImage, Popen, Info
-    docker.go              → Docker/Podman with session isolation, bounded networks, proxy relay
+    docker.go              → Docker/Podman with session isolation, bounded networks, proxy forwarding
     local.go               → Direct os/exec with optional command whitelist
   config/
     store.go               → SQLite database via dsorm — workspaces, chats, messages, history,
                               providers, memory, secrets, cron jobs, token usage, settings
     models.go              → Data models: Workspace, Chat, ChatMessage, History, Provider, Memory, etc.
-    profile.go             → Hub profile sync (remote provider injection)
+    profile.go             → Remote profile sync (provider/secret injection via tunnel)
     secret.go              → OS-native encryption key management
     store_settings.go      → Typed settings accessors (rate limits, token caps, message window, etc.)
   serverjs/serverjs.go     → Server-side JS handler for .server.js endpoints in public dirs
   mcp/                     → MCP server: JSON-RPC 2.0 handler, .agent/mcp/ tool scanner
   cron/                    → Cron scheduler: script mode (Goja) and AI task mode (agent.Send)
-  tunnel/                  → Relay tunnel client using yamux multiplexing
+  tunnel/                  → Tunnel client using yamux multiplexing
   netx/                    → Loopback port management and SSRF IP filtering
+  util/                    → Shared utilities: patch helpers, rate limiting, IP utils
   search/                  → Full-text search utilities
   buildinfo/               → Build version injection
 stdlib/
@@ -82,7 +85,7 @@ web/
   api_files.go             → File browser API: list, read, write, delete, upload
   api_git.go               → Git API: status, diff, commit, log, branches
   api_modules.go           → Module manager API: install, remove, list, create, edit
-  api_tunnel.go            → Tunnel API: connect/disconnect relay, domain management
+  api_tunnel.go            → Tunnel API: connect/disconnect, pairing, domain management
   api_memory.go            → Memory API: list, add, delete
   api_cron.go              → Cron API: list, add, delete
   api_history.go           → Execution history API
@@ -127,7 +130,7 @@ All AI backends implement `Chat`, `ChatStream`, `ListModels`, and `Name`. Provid
 
 **Token tracking:** Every provider call returns `TokenCounts{Prompt, Completion}`. Usage is persisted per-workspace and per-provider to SQLite for daily cap enforcement.
 
-**Relay support:** Profile-based providers (injected from Hub) use a RelayTransport for secure proxying through the relay tunnel.
+**Remote profiles:** Profile-based providers (injected via tunnel pairing) can use a RelayTransport for secure proxying through the tunnel connection.
 
 ### Engine & VM (`internal/engine/engine.go`)
 
@@ -148,7 +151,7 @@ Bridges are registered on the Goja VM at `engine.New()`. The agent bridge (`SetA
 ### Executor (`internal/executor/`)
 
 Two backends:
-- **Docker/Podman** (`docker.go`): Session-isolated containers. Default container for main agent, separate containers per sub-agent session. Bounded networks, proxy relay for host port access. Image switching via `sys.setImage()`.
+- **Docker/Podman** (`docker.go`): Session-isolated containers. Default container for main agent, separate containers per sub-agent session. Bounded networks, proxy forwarding for host port access. Image switching via `sys.setImage()`.
 - **Local** (`local.go`): Direct `os/exec`. Optional command whitelist for security. Used for development or trusted environments.
 
 Auto-detection: tries Docker first, then Podman, falls back to "none" (sys.call disabled).
@@ -177,7 +180,7 @@ SQLite database via [dsorm](https://github.com/altlimit/dsorm) in `~/.altclaw/`.
 
 | Model | Purpose |
 |-------|---------|
-| `Workspace` | Path, public dir, tunnel host/token, executor overrides, settings |
+| `Workspace` | Path, public dir, tunnel config, executor overrides, settings |
 | `Provider` | Name, type, API key, model, base URL, rate limit, daily caps |
 | `Chat` / `ChatMessage` | Conversation persistence and message history |
 | `History` | Code block execution log with results (debugging) |
