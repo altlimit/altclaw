@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
 import { useEditorStore } from '@/stores/editor'
 import { useEventStore } from '@/stores/events'
+import { onMounted, onUnmounted, ref } from 'vue'
 
 const editorStore = useEditorStore()
 const eventStore = useEventStore()
@@ -81,19 +81,19 @@ function relativeAge(iso: string): string {
 }
 
 function openEntry(entry: MemEntry) {
-  const scope = entry.ns ? 'workspace' : 'user'
-  const path = `memory://entry-${entry.id}`
-  const label = `Memory #${entry.id}`
-  editorStore.openMemoryEntryTab(path, label, entry.content, entry.id, scope)
+  const path = `memory://entry-${entry.ns}-${entry.id}`
+  const label = `Memory #${entry.id} (${entry.ns})`
+  editorStore.openMemoryEntryTab(path, label, entry.content, entry.id, entry.ns)
 }
 
 async function deleteEntry(entry: MemEntry) {
   try {
-    const resp = await fetch(`/api/memory-entries/${entry.id}`, { method: 'DELETE' })
+    const scope = entry.ns ? 'workspace' : 'user'
+    const resp = await fetch(`/api/memory-entries/${scope}/${entry.id}`, { method: 'DELETE' })
     if (!resp.ok) throw new Error(await resp.text())
     workspaceEntries.value = workspaceEntries.value.filter(e => e.id !== entry.id)
     userEntries.value = userEntries.value.filter(e => e.id !== entry.id)
-    editorStore.closeFile(`memory://entry-${entry.id}`)
+    editorStore.closeFile(`memory://entry-${scope}-${entry.id}`)
   } catch (e: any) {
     error.value = 'Delete failed: ' + e.message
   }
@@ -103,7 +103,7 @@ function onMemoryEvent(evt: any) {
   if (evt.action === 'deleted' && evt.id) {
     workspaceEntries.value = workspaceEntries.value.filter(e => e.id !== evt.id)
     userEntries.value = userEntries.value.filter(e => e.id !== evt.id)
-    editorStore.closeFile(`memory://entry-${evt.id}`)
+    editorStore.closeFile(`memory://entry-${evt.ns}-${evt.id}`)
     return
   }
   refresh()

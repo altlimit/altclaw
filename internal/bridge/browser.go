@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"altclaw.ai/internal/config"
 	"altclaw.ai/internal/netx"
 	"github.com/dop251/goja"
 	"github.com/go-rod/rod"
@@ -19,6 +21,163 @@ import (
 	"github.com/go-rod/stealth"
 )
 
+// ── Shadow DOM piercing helpers ──────────────────────────────────────
+
+// jsDeepQuerySelector is browser-side JS that finds the first element
+// matching a CSS selector, recursively traversing open shadow roots.
+const jsDeepQuerySelector = `(sel) => {
+	function deep(root) {
+		const el = root.querySelector(sel);
+		if (el) return el;
+		const hosts = root.querySelectorAll('*');
+		for (const h of hosts) {
+			if (h.shadowRoot) {
+				const found = deep(h.shadowRoot);
+				if (found) return found;
+			}
+		}
+		return null;
+	}
+	return deep(document);
+}`
+
+// jsDeepQuerySelectorAll is browser-side JS that finds all elements
+// matching a CSS selector, recursively traversing open shadow roots.
+// Returns an array so rod can iterate the remote object.
+const jsDeepQuerySelectorAll = `(sel) => {
+	const results = [];
+	function deep(root) {
+		root.querySelectorAll(sel).forEach(el => results.push(el));
+		root.querySelectorAll('*').forEach(h => {
+			if (h.shadowRoot) deep(h.shadowRoot);
+		});
+	}
+	deep(document);
+	return results;
+}`
+
+// jsDeepText extracts visible text from the page including shadow DOM content.
+const jsDeepText = `() => {
+	function deep(node) {
+		let text = '';
+		if (node.shadowRoot) {
+			text += deep(node.shadowRoot);
+		} else if (node.childNodes.length === 0) {
+			if (node.nodeType === 3) text += node.textContent;
+		} else {
+			for (const child of node.childNodes) {
+				if (child.nodeType === 1) {
+					const style = window.getComputedStyle(child);
+					if (style.display === 'none' || style.visibility === 'hidden') continue;
+					text += deep(child);
+				} else if (child.nodeType === 3) {
+					text += child.textContent;
+				}
+			}
+		}
+		return text;
+	}
+	return deep(document.body);
+}`
+
+// jsDeepHTML serializes the full DOM including shadow DOM content.
+const jsDeepHTML = `() => {
+	function deep(node) {
+		if (node.nodeType === 3) return node.textContent;
+		if (node.nodeType !== 1) return '';
+		const tag = node.tagName.toLowerCase();
+		let attrs = '';
+		for (const a of node.attributes || []) {
+			attrs += ' ' + a.name + '="' + a.value.replace(/"/g, '&quot;') + '"';
+		}
+		let inner = '';
+		if (node.shadowRoot) {
+			inner += '<!--shadow-root-->';
+			for (const child of node.shadowRoot.childNodes) inner += deep(child);
+			inner += '<!--/shadow-root-->';
+		}
+		for (const child of node.childNodes) inner += deep(child);
+		return '<' + tag + attrs + '>' + inner + '</' + tag + '>';
+	}
+	return deep(document.documentElement);
+}`
+
+// deepElement finds a single element by CSS selector, piercing shadow DOM.
+// Falls back to standard page.Element (with short timeout) only if the JS eval fails.
+func deepElement(page *rod.Page, selector string) (*rod.Element, error) {
+	result, err := page.Evaluate(rod.Eval(jsDeepQuerySelector, selector).ByObject().ByPromise())
+	if err != nil {
+		// JS eval failed (e.g. context not ready) — try standard query with a short timeout
+		return page.Timeout(3 * time.Second).Element(selector)
+	}
+	if result.ObjectID == "" {
+		// Deep search traversed the entire DOM (including shadow roots) and found nothing.
+		// Don't fall back to page.Element which would block indefinitely.
+		return nil, fmt.Errorf("element %q not found (searched light DOM and shadow roots)", selector)
+	}
+	return page.ElementFromObject(result)
+}
+
+// deepElements finds all elements by CSS selector, piercing shadow DOM.
+func deepElements(page *rod.Page, selector string) ([]*rod.Element, error) {
+	result, err := page.Evaluate(rod.Eval(jsDeepQuerySelectorAll, selector).ByObject().ByPromise())
+	if err != nil {
+		// JS eval failed — try standard query with short timeout
+		return page.Timeout(3 * time.Second).Elements(selector)
+	}
+	if result.ObjectID == "" {
+		// Deep search returned empty array or null — return empty slice
+		return nil, nil
+	}
+	// The result is a JS array of elements. Get the array properties via CDP.
+	props, err := proto.RuntimeGetProperties{
+		ObjectID:      result.ObjectID,
+		OwnProperties: true,
+	}.Call(page)
+	if err != nil {
+		return nil, nil
+	}
+	var elements []*rod.Element
+	for _, prop := range props.Result {
+		if prop.Value == nil || prop.Value.ObjectID == "" {
+			continue
+		}
+		// Skip non-numeric property names (like "length")
+		if prop.Name == "length" || prop.Name == "__proto__" {
+			continue
+		}
+		el, err := page.ElementFromObject(&proto.RuntimeRemoteObject{
+			ObjectID: prop.Value.ObjectID,
+		})
+		if err != nil {
+			continue
+		}
+		elements = append(elements, el)
+	}
+	return elements, nil
+}
+
+// looksLikeFunction checks if JS code starts with a function expression
+// or arrow function that rod can directly evaluate.
+func looksLikeFunction(code string) bool {
+	s := strings.TrimSpace(code)
+	if strings.HasPrefix(s, "function") || strings.HasPrefix(s, "async ") {
+		return true
+	}
+	// Arrow functions: () =>, (a) =>, (a, b) =>, etc.
+	if strings.HasPrefix(s, "(") {
+		// Look for => within the first paren group
+		parenEnd := strings.Index(s, ")")
+		if parenEnd > 0 && parenEnd+1 < len(s) {
+			after := strings.TrimSpace(s[parenEnd+1:])
+			if strings.HasPrefix(after, "=>") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // BrowserCleanup is a function that cleans up browser resources.
 type BrowserCleanup func()
 
@@ -26,12 +185,15 @@ type BrowserCleanup func()
 // workspace is the jailed directory for saving screenshots/PDFs.
 // Each call creates a unique temp directory for the Chrome user-data profile
 // so concurrent agents never collide on the same profile lock.
+// handler is optional — if provided, enables page.pause() for user interaction.
+// pauser is optional — if provided, page.pause() will pause the execution deadline.
 // Returns a cleanup function that must be called when the engine shuts down.
-func RegisterBrowser(vm *goja.Runtime, workspace string) BrowserCleanup {
+func RegisterBrowser(vm *goja.Runtime, workspace string, handler UIHandler, pauser DeadlinePauser, store *config.Store, ctxFn ...func() context.Context) BrowserCleanup {
 	// Track all active browsers for cleanup (thread-safe)
 	var mu sync.Mutex
 	var activeBrowsers []*rod.Browser
-	var activeLaunchers []*launcher.Launcher
+	var activeTempLaunchers []*launcher.Launcher // ephemeral — Cleanup() deletes data dir
+	var activePersistLaunchers []*launcher.Launcher // persistent — Kill() preserves data dir
 	var activeTempDirs []string
 
 	// Start an SSRF-safe proxy for Chrome to use.
@@ -49,11 +211,17 @@ func RegisterBrowser(vm *goja.Runtime, workspace string) BrowserCleanup {
 		for _, b := range activeBrowsers {
 			_ = b.Close()
 		}
-		for _, l := range activeLaunchers {
+		// Ephemeral launchers: kill process AND delete data dir
+		for _, l := range activeTempLaunchers {
 			l.Cleanup()
 		}
+		// Persistent launchers: kill process only, preserve user data dir
+		for _, l := range activePersistLaunchers {
+			l.Kill()
+		}
 		activeBrowsers = nil
-		activeLaunchers = nil
+		activeTempLaunchers = nil
+		activePersistLaunchers = nil
 		for _, d := range activeTempDirs {
 			_ = os.RemoveAll(d)
 		}
@@ -66,7 +234,7 @@ func RegisterBrowser(vm *goja.Runtime, workspace string) BrowserCleanup {
 	browserObj := vm.NewObject()
 
 	// browser.open(url, opts?) → page object
-	// opts: { headless: bool (default true), wait: "load"|"idle"|"selector:...", timeout: ms (default 30000), viewport: {width, height} }
+	// opts: { headless: bool (default true), visible: bool (default false), wait: "load"|"idle"|"selector:...", timeout: ms (default 30000), viewport: {width, height}, dataPath: string }
 	const maxBrowsers = 3
 	browserObj.Set("open", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
@@ -92,13 +260,19 @@ func RegisterBrowser(vm *goja.Runtime, workspace string) BrowserCleanup {
 		waitStrategy := "load"
 		timeoutMs := 30000
 		viewportW, viewportH := 0, 0
+		dataPath := ""
 
 		// Parse options
 		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
 			opts := call.Arguments[1].ToObject(vm)
-			CheckOpts(vm, "browser.open", opts, "headless", "wait", "timeout", "viewport")
+			CheckOpts(vm, "browser.open", opts, "headless", "visible", "wait", "timeout", "viewport", "dataPath")
 			if v := opts.Get("headless"); v != nil && !goja.IsUndefined(v) {
 				headless = v.ToBoolean()
+			}
+			if v := opts.Get("visible"); v != nil && !goja.IsUndefined(v) {
+				if v.ToBoolean() {
+					headless = false
+				}
 			}
 			if v := opts.Get("wait"); v != nil && !goja.IsUndefined(v) {
 				waitStrategy = v.String()
@@ -115,44 +289,95 @@ func RegisterBrowser(vm *goja.Runtime, workspace string) BrowserCleanup {
 					viewportH = int(h.ToInteger())
 				}
 			}
+			if v := opts.Get("dataPath"); v != nil && !goja.IsUndefined(v) {
+				dataPath = v.String()
+			}
 		}
 
-		// Create a unique temp directory for this browser session
-		userDataDir, err := os.MkdirTemp("", "altclaw-browser-*")
-		if err != nil {
-			Throwf(vm, "browser.open: failed to create temp profile dir: %v", err)
+		// Determine user-data directory: persistent (dataPath) or ephemeral (temp)
+		var userDataDir string
+		persistProfile := false
+		if dataPath != "" {
+			safe := sanitizeBrowserPath(workspace, dataPath)
+			if safe == "" {
+				Throw(vm, "browser.open: dataPath escapes workspace")
+			}
+			if err := os.MkdirAll(safe, 0755); err != nil {
+				Throwf(vm, "browser.open: failed to create dataPath dir: %v", sanitizeError(workspace, "", err))
+			}
+			userDataDir = safe
+			persistProfile = true
+
+			// Clear Chrome singleton locks so we can reclaim a profile left
+			// behind by a crashed or orphaned browser instance.
+			for _, lock := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
+				_ = os.Remove(filepath.Join(safe, lock))
+			}
+		} else {
+			var err error
+			userDataDir, err = os.MkdirTemp("", "altclaw-browser-*")
+			if err != nil {
+				Throwf(vm, "browser.open: failed to create temp profile dir: %v", err)
+			}
 		}
 
-		// Launch browser with SSRF proxy
-		l := launcher.New().
-			UserDataDir(userDataDir).
-			Headless(headless).
-			Set("disable-gpu").
-			Set("no-sandbox").
-			Set("disable-dev-shm-usage")
+		// Launch browser — with retry for locked persistent profiles.
+		// Leakless is disabled because Windows Defender flags leakless.exe as
+		// a false positive. We have our own cleanup (activeBrowsers + cleanup func).
+		launchBrowser := func() (string, *launcher.Launcher, error) {
+			ll := launcher.New().
+				Leakless(false).
+				UserDataDir(userDataDir).
+				Headless(headless).
+				Set("disable-gpu").
+				Set("no-sandbox").
+				Set("disable-dev-shm-usage")
 
-		// Route all Chrome traffic through our SSRF-safe proxy
-		if proxyURL != "" {
-			l = l.Set("proxy-server", proxyURL)
+			// Route all Chrome traffic through our SSRF-safe proxy
+			if proxyURL != "" {
+				ll = ll.Set("proxy-server", proxyURL)
+			}
+
+			url, err := ll.Launch()
+			return url, ll, err
 		}
 
-		controlURL, err2 := l.Launch()
+		controlURL, l, err2 := launchBrowser()
+		if err2 != nil && persistProfile && strings.Contains(err2.Error(), "existing browser session") {
+			// Chrome is still running with this profile — kill it and retry
+			killChromeForProfile(userDataDir)
+			time.Sleep(500 * time.Millisecond) // give OS time to release locks
+			for _, lock := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"} {
+				_ = os.Remove(filepath.Join(userDataDir, lock))
+			}
+			controlURL, l, err2 = launchBrowser()
+		}
 		if err2 != nil {
-			_ = os.RemoveAll(userDataDir)
+			if !persistProfile {
+				_ = os.RemoveAll(userDataDir)
+			}
 			Throwf(vm, "browser.open: failed to launch browser: %v", sanitizeError(workspace, userDataDir, err2))
 		}
 
 		browser := rod.New().ControlURL(controlURL)
 		if err := browser.Connect(); err != nil {
-			l.Cleanup()
-			_ = os.RemoveAll(userDataDir)
+			if persistProfile {
+				l.Kill() // Kill process but preserve user data
+			} else {
+				l.Cleanup()
+				_ = os.RemoveAll(userDataDir)
+			}
 			Throwf(vm, "browser.open: failed to connect to browser: %v", sanitizeError(workspace, userDataDir, err))
 		}
 
 		mu.Lock()
 		activeBrowsers = append(activeBrowsers, browser)
-		activeLaunchers = append(activeLaunchers, l)
-		activeTempDirs = append(activeTempDirs, userDataDir)
+		if persistProfile {
+			activePersistLaunchers = append(activePersistLaunchers, l)
+		} else {
+			activeTempLaunchers = append(activeTempLaunchers, l)
+			activeTempDirs = append(activeTempDirs, userDataDir)
+		}
 		mu.Unlock()
 
 		// Create page and navigate
@@ -180,7 +405,7 @@ func RegisterBrowser(vm *goja.Runtime, workspace string) BrowserCleanup {
 		// Reset timeout after wait
 		page = page.CancelTimeout()
 
-		return buildPageObject(vm, page, browser, workspace, l, userDataDir)
+		return buildPageObject(vm, page, browser, workspace, l, userDataDir, persistProfile, handler, pauser, store, ctxFn...)
 	})
 
 	vm.Set("browser", browserObj)
@@ -206,29 +431,40 @@ func applyWaitStrategy(page *rod.Page, strategy string) error {
 }
 
 // buildPageObject creates the JS page object with all methods.
-func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, workspace string, l *launcher.Launcher, userDataDir string) goja.Value {
+func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, workspace string, l *launcher.Launcher, userDataDir string, persistProfile bool, handler UIHandler, pauser DeadlinePauser, store *config.Store, ctxFn ...func() context.Context) goja.Value {
+	getCtx := defaultCtxFn(ctxFn)
 	obj := vm.NewObject()
 
-	// page.html() → string — full page HTML
+	// page.html() → string — full page HTML including shadow DOM content
 	obj.Set("html", func(call goja.FunctionCall) goja.Value {
-		html, err := page.HTML()
+		result, err := page.Eval(jsDeepHTML)
 		if err != nil {
-			Throwf(vm, "page.html error: %v", err)
+			// Fallback to standard HTML if deep traversal fails
+			html, err2 := page.HTML()
+			if err2 != nil {
+				Throwf(vm, "page.html error: %v", err)
+			}
+			return vm.ToValue(html)
 		}
-		return vm.ToValue(html)
+		return vm.ToValue(result.Value.Str())
 	})
 
-	// page.text() → string — visible text content
+	// page.text() → string — visible text content including shadow DOM
 	obj.Set("text", func(call goja.FunctionCall) goja.Value {
-		el, err := page.Element("body")
+		result, err := page.Eval(jsDeepText)
 		if err != nil {
-			Throwf(vm, "page.text error: %v", err)
+			// Fallback to standard text if deep traversal fails
+			el, err2 := page.Element("body")
+			if err2 != nil {
+				Throwf(vm, "page.text error: %v", err)
+			}
+			text, err2 := el.Text()
+			if err2 != nil {
+				Throwf(vm, "page.text error: %v", err)
+			}
+			return vm.ToValue(text)
 		}
-		text, err := el.Text()
-		if err != nil {
-			Throwf(vm, "page.text error: %v", err)
-		}
-		return vm.ToValue(text)
+		return vm.ToValue(result.Value.Str())
 	})
 
 	// page.title() → string
@@ -339,13 +575,13 @@ func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, wor
 		return goja.Undefined()
 	})
 
-	// page.click(selector)
+	// page.click(selector) — pierces shadow DOM
 	obj.Set("click", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			Throw(vm, "page.click requires a selector argument")
 		}
 		sel := call.Arguments[0].String()
-		el, err := page.Element(sel)
+		el, err := deepElement(page, sel)
 		if err != nil {
 			Throwf(vm, "page.click: element %q not found: %v", sel, err)
 		}
@@ -355,14 +591,18 @@ func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, wor
 		return goja.Undefined()
 	})
 
-	// page.type(selector, text)
+	// page.type(selector, text) — pierces shadow DOM
 	obj.Set("type", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 2 {
 			Throw(vm, "page.type requires selector and text arguments")
 		}
 		sel := call.Arguments[0].String()
 		text := call.Arguments[1].String()
-		el, err := page.Element(sel)
+		// Expand {{secrets.NAME}} so agents can type passwords without seeing raw values
+		if store != nil {
+			text = ExpandSecrets(getCtx(), store, text)
+		}
+		el, err := deepElement(page, sel)
 		if err != nil {
 			Throwf(vm, "page.type: element %q not found: %v", sel, err)
 		}
@@ -372,61 +612,114 @@ func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, wor
 		return goja.Undefined()
 	})
 
-	// page.eval(jsCode) → result
+	// page.eval(jsCode) → result (auto-wraps non-function code, returns parsed objects)
 	obj.Set("eval", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			Throw(vm, "page.eval requires a JavaScript code argument")
 		}
 		code := call.Arguments[0].String()
+
+		// Auto-wrap non-function code so rod can evaluate it.
+		// Rod wraps code as `.apply(this, args)` which fails on IIFEs and statements.
+		if !looksLikeFunction(code) {
+			trimmed := strings.TrimSpace(code)
+			// Single expression: use expression-body arrow so it's implicitly returned
+			// Multi-statement: wrap in block with return on the last expression
+			if !strings.Contains(trimmed, "\n") && !strings.HasSuffix(trimmed, ";") {
+				code = "() => (" + trimmed + ")"
+			} else {
+				code = "() => {\n" + code + "\n}"
+			}
+		}
+
 		result, err := page.Eval(code)
 		if err != nil {
 			Throwf(vm, "page.eval error: %v", err)
 		}
-		// Convert the result to a string then parse in goja
-		str := result.Value.String()
-		return vm.ToValue(str)
+
+		// Try to return structured data instead of raw strings.
+		// For objects/arrays, JSON-serialize in the browser and parse in goja.
+		raw := result.Value.Raw()
+		if raw == nil {
+			return goja.Undefined()
+		}
+
+		// If the result is a primitive (string, number, bool), return directly
+		switch v := raw.(type) {
+		case string:
+			return vm.ToValue(v)
+		case float64:
+			return vm.ToValue(v)
+		case bool:
+			return vm.ToValue(v)
+		case json.Number:
+			if i, err := v.Int64(); err == nil {
+				return vm.ToValue(i)
+			}
+			if f, err := v.Float64(); err == nil {
+				return vm.ToValue(f)
+			}
+			return vm.ToValue(v.String())
+		}
+
+		// For objects/arrays, re-serialize and parse in goja
+		jsonBytes, err := json.Marshal(raw)
+		if err != nil {
+			return vm.ToValue(result.Value.String())
+		}
+		parsed, err := vm.RunString("(" + string(jsonBytes) + ")")
+		if err != nil {
+			return vm.ToValue(string(jsonBytes))
+		}
+		return parsed
 	})
 
-	// page.waitFor(selector, timeout?)
+	// page.waitFor(selector, timeout?) — pierces shadow DOM via polling
 	obj.Set("waitFor", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			Throw(vm, "page.waitFor requires a selector argument")
 		}
 		sel := call.Arguments[0].String()
 
-		p := page
+		timeoutMs := int64(10000)
 		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) {
-			ms := call.Arguments[1].ToInteger()
-			p = page.Timeout(time.Duration(ms) * time.Millisecond)
+			timeoutMs = call.Arguments[1].ToInteger()
 		}
 
-		_, err := p.Element(sel)
-		if err != nil {
-			Throwf(vm, "page.waitFor: %q not found: %v", sel, err)
+		// Poll with deepElement to find elements inside shadow DOM
+		deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+		for {
+			_, err := deepElement(page, sel)
+			if err == nil {
+				return goja.Undefined()
+			}
+			if time.Now().After(deadline) {
+				Throwf(vm, "page.waitFor: %q not found after %dms", sel, timeoutMs)
+			}
+			time.Sleep(200 * time.Millisecond)
 		}
-		return goja.Undefined()
 	})
 
-	// page.select(selector) → {text, html, attr(name)}
+	// page.select(selector) → {text, html, attr(name)} — pierces shadow DOM
 	obj.Set("select", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			Throw(vm, "page.select requires a selector argument")
 		}
 		sel := call.Arguments[0].String()
-		el, err := page.Element(sel)
+		el, err := deepElement(page, sel)
 		if err != nil {
 			Throwf(vm, "page.select: %q not found: %v", sel, err)
 		}
 		return buildElementObject(vm, el)
 	})
 
-	// page.selectAll(selector) → [{text, html, attr(name)}]
+	// page.selectAll(selector) → [{text, html, attr(name)}] — pierces shadow DOM
 	obj.Set("selectAll", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			Throw(vm, "page.selectAll requires a selector argument")
 		}
 		sel := call.Arguments[0].String()
-		elements, err := page.Elements(sel)
+		elements, err := deepElements(page, sel)
 		if err != nil {
 			Throwf(vm, "page.selectAll: %q error: %v", sel, err)
 		}
@@ -471,9 +764,9 @@ func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, wor
 				Throwf(vm, "page.scroll error: %v", err)
 			}
 		} else {
-			// Treat as selector
+			// Treat as selector — pierces shadow DOM
 			sel := arg.String()
-			el, err := page.Element(sel)
+			el, err := deepElement(page, sel)
 			if err != nil {
 				Throwf(vm, "page.scroll: element %q not found: %v", sel, err)
 			}
@@ -549,12 +842,89 @@ func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, wor
 		return handle
 	})
 
+	// page.back() — navigate back in browser history
+	obj.Set("back", func(call goja.FunctionCall) goja.Value {
+		if err := page.NavigateBack(); err != nil {
+			Throwf(vm, "page.back error: %v", err)
+		}
+		if err := page.WaitLoad(); err != nil {
+			Throwf(vm, "page.back wait error: %v", err)
+		}
+		return goja.Undefined()
+	})
+
+	// page.forward() — navigate forward in browser history
+	obj.Set("forward", func(call goja.FunctionCall) goja.Value {
+		if err := page.NavigateForward(); err != nil {
+			Throwf(vm, "page.forward error: %v", err)
+		}
+		if err := page.WaitLoad(); err != nil {
+			Throwf(vm, "page.forward wait error: %v", err)
+		}
+		return goja.Undefined()
+	})
+
+	// page.pause(message?) — block execution until user responds.
+	// Used to let the user manually interact with the browser (e.g. login).
+	obj.Set("pause", func(call goja.FunctionCall) goja.Value {
+		if handler == nil {
+			Throw(vm, "page.pause: not available (no UI handler)")
+		}
+		msg := "Browser paused. Please complete your actions in the browser, then type anything here to continue."
+		if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) && !goja.IsNull(call.Arguments[0]) {
+			msg = call.Arguments[0].String()
+		}
+
+		handler.Log("⏸️ " + msg)
+
+		// Pause the execution deadline so the user has unlimited time
+		if pauser != nil {
+			pauser.PauseDeadline()
+		}
+		_ = handler.Ask(msg)
+		if pauser != nil {
+			pauser.ResumeDeadline()
+		}
+
+		handler.Log("▶️ Resuming browser automation")
+		return goja.Undefined()
+	})
+
+	// page.cookies() — return all cookies for the current page as an array of objects.
+	obj.Set("cookies", func(call goja.FunctionCall) goja.Value {
+		cookies, err := proto.NetworkGetAllCookies{}.Call(page)
+		if err != nil {
+			Throwf(vm, "page.cookies error: %v", err)
+		}
+		arr := make([]interface{}, 0, len(cookies.Cookies))
+		for _, c := range cookies.Cookies {
+			co := vm.NewObject()
+			co.Set("name", c.Name)
+			co.Set("value", c.Value)
+			co.Set("domain", c.Domain)
+			co.Set("path", c.Path)
+			co.Set("secure", c.Secure)
+			co.Set("httpOnly", c.HTTPOnly)
+			if c.Expires != 0 {
+				co.Set("expires", c.Expires.Time().Unix())
+			}
+			arr = append(arr, co)
+		}
+		return vm.ToValue(arr)
+	})
+
 	// page.close() — close page and browser
 	obj.Set("close", func(call goja.FunctionCall) goja.Value {
 		_ = page.Close()
 		_ = browser.Close()
-		l.Cleanup()
-		_ = os.RemoveAll(userDataDir)
+		if persistProfile {
+			// Kill browser process but preserve user data directory for session persistence
+			l.Kill()
+		} else {
+			// Ephemeral profile: kill process AND delete data dir
+			l.Cleanup()
+			_ = os.RemoveAll(userDataDir)
+		}
 		return goja.Undefined()
 	})
 

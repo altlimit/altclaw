@@ -28,6 +28,7 @@ const editorOptions = {
 
 const editorRef = shallowRef()
 let _internalChange = false
+let _suppressChange = false   // true while we programmatically call setValue()
 
 const { monacoRef } = useMonaco()
 
@@ -38,7 +39,9 @@ watch(() => props.modelValue, (newVal) => {
   if (_internalChange) return
   const editor = editorRef.value
   if (editor && editor.getValue() !== newVal) {
+    _suppressChange = true
     editor.setValue(newVal)
+    _suppressChange = false
   }
 })
 
@@ -65,6 +68,7 @@ function handleMount(editor: any) {
 }
 
 function handleChange(value: string | undefined) {
+  if (_suppressChange) return     // programmatic setValue – not a user edit
   _internalChange = true
   emit('update:modelValue', value || '')
   _internalChange = false

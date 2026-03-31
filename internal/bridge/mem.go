@@ -14,8 +14,8 @@ import (
 //
 // Writing:
 //
-//	mem.add(content, kind?)      — add workspace entry. kind: "core"|"learned"|"note", default "learned". Returns ID.
-//	mem.addUser(content, kind?)  — add user-level entry (global). Returns ID.
+//	mem.add(content, kind?, scope?)  — add memory entry. kind: "core"|"learned"|"note", default "learned".
+//	                                   scope: "user" for global, omit for workspace. Returns ID.
 //
 // Reading:
 //
@@ -26,8 +26,8 @@ import (
 //
 // Management:
 //
-//	mem.rm(id)          — remove entry by ID
-//	mem.promote(id)     — promote learned/note → core
+//	mem.rm(id, scope?)      — remove entry by ID. scope: "user" for global entries.
+//	mem.promote(id, scope?) — promote learned/note → core. scope: "user" for global entries.
 //
 // ctxFn is an optional context factory that returns a broadcast-enriched context
 // so that AfterSave hooks on the Memory model can fire SSE events.
@@ -39,7 +39,8 @@ func RegisterMem(vm *goja.Runtime, store *config.Store, workspace string, ctxFn 
 		return k == "core" || k == "learned" || k == "note"
 	}
 
-	// mem.add(content, kind?) — add workspace-level memory entry
+	// mem.add(content, kind?, scope?) — add memory entry
+	// scope: "user" for global (cross-workspace), omit or "" for workspace-local.
 	mem.Set("add", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			return vm.ToValue("")
@@ -52,29 +53,13 @@ func RegisterMem(vm *goja.Runtime, store *config.Store, workspace string, ctxFn 
 		if !validKind(kind) {
 			kind = "learned"
 		}
-		entry := &config.Memory{Workspace: workspace, Kind: kind, Content: content}
+		ns := workspace
+		if len(call.Arguments) >= 3 && call.Arguments[2].String() == "user" {
+			ns = ""
+		}
+		entry := &config.Memory{Workspace: ns, Kind: kind, Content: content}
 		if err := store.AddMemory(getCtx(), entry); err != nil {
 			logErr(vm, "mem.add", err)
-		}
-		return vm.ToValue(entry.ID)
-	})
-
-	// mem.addUser(content, kind?) — add user-level memory entry
-	mem.Set("addUser", func(call goja.FunctionCall) goja.Value {
-		if len(call.Arguments) < 1 {
-			return vm.ToValue("")
-		}
-		content := call.Arguments[0].String()
-		kind := "learned"
-		if len(call.Arguments) >= 2 {
-			kind = call.Arguments[1].String()
-		}
-		if !validKind(kind) {
-			kind = "learned"
-		}
-		entry := &config.Memory{Workspace: "", Kind: kind, Content: content}
-		if err := store.AddMemory(getCtx(), entry); err != nil {
-			logErr(vm, "mem.addUser", err)
 		}
 		return vm.ToValue(entry.ID)
 	})
@@ -111,36 +96,36 @@ func RegisterMem(vm *goja.Runtime, store *config.Store, workspace string, ctxFn 
 		return vm.ToValue(mergeEntries(store, getCtx(), workspace, time.Time{}, query))
 	})
 
-	// mem.rm(id) — remove entry by ID (tries workspace first, then user)
+	// mem.rm(id, scope?) — remove entry by ID
+	// scope: "user" for global entries, omit for workspace-local.
 	mem.Set("rm", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			Throw(vm, "mem.rm requires an entry ID")
 		}
 		id := call.Arguments[0].ToInteger()
-		ctx := getCtx()
-		// Try workspace first
-		if err := store.DeleteMemory(ctx, workspace, id); err != nil {
-			// Try user-level
-			if err := store.DeleteMemory(ctx, "", id); err != nil {
-				Throwf(vm, "mem.rm: entry %d not found", id)
-			}
+		ns := workspace
+		if len(call.Arguments) >= 2 && call.Arguments[1].String() == "user" {
+			ns = ""
+		}
+		if err := store.DeleteMemory(getCtx(), ns, id); err != nil {
+			Throwf(vm, "mem.rm: entry %d not found", id)
 		}
 		return vm.ToValue("removed")
 	})
 
-	// mem.promote(id) — promote learned/note → core
+	// mem.promote(id, scope?) — promote learned/note → core
+	// scope: "user" for global entries, omit for workspace-local.
 	mem.Set("promote", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 1 {
 			Throw(vm, "mem.promote requires an entry ID")
 		}
 		id := call.Arguments[0].ToInteger()
-		ctx := getCtx()
-		// Try workspace first
-		if err := store.PromoteMemory(ctx, workspace, id); err != nil {
-			// Try user-level
-			if err := store.PromoteMemory(ctx, "", id); err != nil {
-				Throwf(vm, "mem.promote: entry %d not found", id)
-			}
+		ns := workspace
+		if len(call.Arguments) >= 2 && call.Arguments[1].String() == "user" {
+			ns = ""
+		}
+		if err := store.PromoteMemory(getCtx(), ns, id); err != nil {
+			Throwf(vm, "mem.promote: entry %d not found", id)
 		}
 		return vm.ToValue("promoted to core")
 	})

@@ -1,17 +1,38 @@
 /**
  * @name web
- * @description Headless Chrome session. b.go(url); b.scrape(cssSel); b.click(sel); b.snap(); b.close();
+ * @description Headless Chrome session with visible mode and session persistence. b.go(url); b.scrape(cssSel); b.click(sel); b.snap(); b.close();
  * @example var b = require("web"); b.go("https://example.com"); var items = b.scrape("h1"); b.close();
  */
 
 // Session-first browser wrapper — all methods auto-wait for selectors.
 // The session persists in store._bpage across JS execution iterations.
 var page = store._bpage || null;
-var opts = {};
+var lastOpts = store._bopts || {}; // remember open opts for auto-recovery
+
+// Internal: safely close a dead page reference without throwing
+function killPage() {
+  if (page) {
+    try { page.close(); } catch (e) { /* already dead */ }
+  }
+  page = null;
+  store._bpage = null;
+}
+
+// Internal: check if current page is still alive
+function isAlive() {
+  if (!page) return false;
+  try {
+    page.url(); // lightweight probe — throws if connection is dead
+    return true;
+  } catch (e) {
+    killPage();
+    return false;
+  }
+}
 
 // Internal: ensure browser is open, panic if not
 function ensurePage(method) {
-  if (!page) {
+  if (!page || !isAlive()) {
     throw new Error(method + ": no page open. Call b.go(url) first.");
   }
 }
@@ -49,34 +70,66 @@ function autoWait(selector, timeoutMs) {
   page.waitFor(selector, timeoutMs || 10000);
 }
 
+// Internal: build browser.open opts from a user options object
+function buildBrowserOpts(o) {
+  var browserOpts = {};
+  if (o.wait) browserOpts.wait = o.wait;
+  if (o.timeout) browserOpts.timeout = o.timeout;
+  if (o.viewport) browserOpts.viewport = o.viewport;
+  if (o.visible) browserOpts.visible = true;
+  if (o.headless === false) browserOpts.headless = false;
+  if (o.dataPath) browserOpts.dataPath = o.dataPath;
+  return browserOpts;
+}
+
+// Internal: open a fresh browser session
+function openFresh(url, o) {
+  killPage(); // clean up any dead refs first
+  var browserOpts = buildBrowserOpts(o);
+  page = browser.open(url, browserOpts);
+  store._bpage = page;
+  // Remember opts for auto-recovery (strip transient fields)
+  store._bopts = { visible: o.visible, dataPath: o.dataPath, viewport: o.viewport };
+  lastOpts = store._bopts;
+}
+
 var session = {
   // * web.go(url: string, opts?: object) → session
   // Navigate to URL (or open browser on first call). Relative paths map to current origin.
-  // opts: {wait: "load"|"idle"|"selector:...", timeout: ms, viewport: {width, height}}
+  // Auto-recovers if browser was closed or crashed.
+  // opts: {wait: "load"|"idle"|"selector:...", timeout: ms, viewport: {width, height}, visible: bool, dataPath: string}
   go: function (url, goOpts) {
     if (!url || typeof url !== "string") {
       throw new Error("go: url must be a non-empty string, got: " + typeof url);
     }
     var o = goOpts || {};
-    if (page) {
-      // Relative path support
-      if (url.indexOf("/") === 0 && url.indexOf("//") !== 0) {
-        var info = page.url();
-        // Extract origin from current URL
-        var match = info.match(/^(https?:\/\/[^\/]+)/);
-        if (match) {
-          url = match[1] + url;
+    // Merge persistent opts (dataPath, visible) from previous session if not explicitly provided
+    if (!goOpts && lastOpts) {
+      o = lastOpts;
+    } else if (goOpts && lastOpts) {
+      if (!o.dataPath && lastOpts.dataPath) o.dataPath = lastOpts.dataPath;
+      if (o.visible === undefined && lastOpts.visible) o.visible = lastOpts.visible;
+    }
+
+    if (page && isAlive()) {
+      // Existing live session — navigate within it
+      try {
+        // Relative path support
+        if (url.indexOf("/") === 0 && url.indexOf("//") !== 0) {
+          var info = page.url();
+          var match = info.match(/^(https?:\/\/[^\/]+)/);
+          if (match) {
+            url = match[1] + url;
+          }
         }
+        page.navigate(url);
+      } catch (e) {
+        // Navigation failed — browser probably died. Reopen fresh.
+        openFresh(url, o);
       }
-      page.navigate(url);
     } else {
-      // First call — launch browser
-      var browserOpts = {};
-      if (o.wait) browserOpts.wait = o.wait;
-      if (o.timeout) browserOpts.timeout = o.timeout;
-      if (o.viewport) browserOpts.viewport = o.viewport;
-      page = browser.open(url, browserOpts);
-      store._bpage = page;
+      // No session or dead session — open fresh
+      openFresh(url, o);
     }
     // Post-navigation wait for dynamic content
     if (o.wait && page) {
@@ -273,6 +326,24 @@ var session = {
     return session;
   },
 
+  // * web.back() → session
+  // Navigate back in browser history (like clicking the back button).
+  back: function () {
+    ensurePage("back");
+    page.back();
+    sleep(500);
+    return session;
+  },
+
+  // * web.forward() → session
+  // Navigate forward in browser history.
+  forward: function () {
+    ensurePage("forward");
+    page.forward();
+    sleep(500);
+    return session;
+  },
+
   // * web.listen(opts?: {filter: string, types: string[]}) → {requests(), stop()}
   // Start capturing network requests. Call requests() to get captured so far, stop() to finish.
   // opts.filter: URL substring or regex pattern to match.
@@ -282,20 +353,40 @@ var session = {
     return page.listen(listenOpts);
   },
 
+  // * web.pause(message?: string) → session
+  // Pauses script execution and asks the user to perform manual actions in the browser
+  // (e.g. log in, solve a captcha). Execution resumes when the user responds.
+  // The execution timeout is paused while waiting.
+  pause: function (message) {
+    ensurePage("pause");
+    page.pause(message);
+    return session;
+  },
+
+  // * web.cookies() → [{name, value, domain, path, secure, httpOnly, expires}]
+  // Returns all cookies for the current browser session.
+  cookies: function () {
+    ensurePage("cookies");
+    return page.cookies();
+  },
+
   // * web.close() → void
-  // **CRITICAL:** Closes the browser session and cleans up memory. Always call this when finished.
+  // Closes the browser session and cleans up memory. Always call this when finished.
   close: function () {
-    if (page) {
-      page.close();
-      page = null;
-      store._bpage = null;
-    }
+    killPage();
+    store._bopts = null;
+    lastOpts = {};
   }
 };
 
-// If a session already exists from a previous iteration, reconnect
+// If a session already exists from a previous iteration, verify it's alive
 if (store._bpage) {
   page = store._bpage;
+  if (!isAlive()) {
+    // Dead session from previous iteration — clean up silently
+    page = null;
+    store._bpage = null;
+  }
 }
 
 module.exports = session;

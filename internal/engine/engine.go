@@ -402,7 +402,7 @@ func New(ws *config.Workspace, exec executor.Executor, uiHandler bridge.UIHandle
 	if uiHandler != nil {
 		bridge.RegisterUI(vm, uiHandler, ws.Path, eng)
 	}
-	browserCleanup := bridge.RegisterBrowser(vm, ws.Path)
+	browserCleanup := bridge.RegisterBrowser(vm, ws.Path, uiHandler, eng, store, broadcastCtx)
 
 	// Git history bridge — bare repo in configDir for workspace versioning
 	bridge.RegisterGit(vm, ws.Path, config.ConfigDir(), ws.ID)

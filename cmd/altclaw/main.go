@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"altclaw.ai/internal/agent"
 	"altclaw.ai/internal/bridge"
@@ -199,6 +200,27 @@ func allowExecutorPort(exec executor.Executor, port string) {
 	if d, ok := exec.(*executor.Docker); ok {
 		d.AllowPort(port)
 	}
+}
+
+// startMemoryExpiry runs memory cleanup immediately and then every 24 hours.
+// Deletes learned entries older than 30 days and note entries older than 7 days.
+func startMemoryExpiry(store *config.Store, wsID string) {
+	expire := func() {
+		removed, err := store.ExpireMemoryEntries(context.Background(), wsID, 30, 7)
+		if err != nil {
+			slog.Warn("memory expiry error", "error", err)
+		} else if removed > 0 {
+			slog.Info("expired memory entries", "removed", removed)
+		}
+	}
+	go func() {
+		expire()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			expire()
+		}
+	}()
 }
 
 // buildAgent creates an agent from the store (used by both TUI and web mode).
@@ -516,6 +538,9 @@ func startWeb(store *config.Store, workspace, addr string) error {
 		cronMgr = nil
 	}
 
+	// Expire old memory entries on startup and every 24 hours
+	startMemoryExpiry(store, ws.ID)
+
 	// Only build agent if configured
 	var eng *engine.Engine
 	var srv *web.Server
@@ -831,6 +856,9 @@ func startTUI(store *config.Store, workspace string) error {
 		slog.Warn("cron setup failed", "error", cronErr)
 		cronMgr = nil
 	}
+
+	// Expire old memory entries on startup and every 24 hours
+	startMemoryExpiry(store, ws.ID)
 
 	var eng *engine.Engine
 	ag, eng, err = buildAgent(store, ws, initialProv, model, exec, resolvedExecType, cronMgr)

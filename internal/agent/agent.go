@@ -22,6 +22,14 @@ import (
 )
 
 var codeBlockRe = regexp.MustCompile("(?si)`{3,}exec[^\n]*\r?\n(.*?)\n?`{3,}")
+var memBlockRe = regexp.MustCompile("(?si)`{3,}mem\\s*([^\n]*)\r?\n(.*?)\n?`{3,}")
+
+// memEntry holds a parsed ```mem block with its optional kind.
+type memEntry struct {
+	kind    string // "core", "learned", "note" — defaults to "learned"
+	content string
+}
+
 var subAgentCounter atomic.Int64
 
 // callSigRe extracts known module-level API calls from code blocks.
@@ -83,6 +91,7 @@ func extractCallSignatures(code string) string {
 	return strings.Join(sigs, ", ")
 }
 
+
 // ledgerPreview truncates a result string for the iteration ledger.
 // Small results (≤3000 chars) are never truncated — they're typically docs,
 // configs, or short outputs that the AI needs in full as reference material.
@@ -137,6 +146,7 @@ Option B: Present to User (to provide the final answer)
 ` + "```md" + `
 Write your final Markdown response for the user here. This ends the conversation turn.
 ` + "```" + `
+After your final ` + "```md" + ` block, add ` + "```mem" + ` blocks to persist info: ` + "```mem core" + ` (permanent) for identity/personal info, ` + "```mem" + ` (30d) for lessons, ` + "```mem note" + ` (7d) for quick notes. Each ` + "```mem" + ` block = ONE fact (e.g. "User's name is peco", "My name is Garr"). Check your Memory section — don't duplicate what's already saved, only add NEW facts. ALWAYS save personal info.
 
 *** CRITICAL ENVIRONMENT RULES ***
 1. CUSTOM RUNTIME: This is a custom JavaScript runtime.
@@ -144,10 +154,10 @@ Write your final Markdown response for the user here. This ends the conversation
 
 *** LEARN FROM MISTAKES ***
 When something fails or doesn't work as expected:
-- Save the lesson: mem.add("what failed and what worked instead", "learned").
 - After ONE failure, try a different approach or think if you can use your internal knowledge.
 - READ THE DOCS: call doc.read("module") to see exact API signatures before using any module.
 - NEVER retry the same code that just failed without meaningful changes.
+- Save the lesson with a ` + "```mem" + ` block after your response.
 
 [ Built-in ]
 - doc: Module manuals and discovery (e.g., doc.find("search"), doc.list(), doc.all())
@@ -572,8 +582,9 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 				var sb strings.Builder
 				// md fence filter: only forward content inside ```md blocks
 				var (
-					lineBuf   string
-					inMdBlock bool
+					lineBuf    string
+					inMdBlock  bool
+					inMemBlock bool
 				)
 				var streamTC provider.TokenCounts
 				err = a.Provider.ChatStream(apiCtx, msgs, func(chunk string) {
@@ -593,10 +604,23 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 						lineBuf = lineBuf[nlIdx+1:]
 						trimmed := strings.TrimSpace(line)
 
+						if inMemBlock {
+							// Inside a mem block — suppress everything until closing fence
+							if strings.HasPrefix(trimmed, "```") && strings.TrimLeft(trimmed, "`") == "" {
+								inMemBlock = false
+							}
+							continue
+						}
+
 						if !inMdBlock {
 							// Opening: ```md or ````md etc.
 							if strings.HasPrefix(trimmed, "```") && strings.HasSuffix(trimmed, "md") {
 								inMdBlock = true
+								continue
+							}
+							// Suppress ```mem blocks from streaming
+							if strings.HasPrefix(trimmed, "```") && strings.HasSuffix(trimmed, "mem") {
+								inMemBlock = true
 								continue
 							}
 						} else {
@@ -668,7 +692,7 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 		})
 
 		// Extract tagged blocks from AI response
-		mdContent, codeBlocks := extractBlocks(response)
+		mdContent, codeBlocks, memBlocks := extractBlocks(response)
 
 		// Persist token counts: increment workspace total + per-provider row (always, for filter/reporting)
 		if a.Store != nil && a.Ws != nil && (turnTokens.Prompt > 0 || turnTokens.Completion > 0) {
@@ -686,6 +710,27 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 			if display == "" {
 				display = response
 			}
+
+			// Process ```mem blocks — save lessons to memory
+			if a.Store != nil && a.Ws != nil {
+				for _, mb := range memBlocks {
+					entry := &config.Memory{
+						Workspace: a.Ws.ID,
+						Kind:      mb.kind,
+						Content:   mb.content,
+					}
+					// Core memories are user-global (identity, preferences) — not workspace-scoped
+					if mb.kind == "core" {
+						entry.Workspace = ""
+					}
+					if err := a.Store.AddMemory(ctx, entry); err != nil {
+						slog.Warn("failed to save mem block", "error", err)
+					} else if a.OnLog != nil {
+						a.OnLog(fmt.Sprintf("💾 Saved to memory (%s): %s", mb.kind, truncate(mb.content, 60)))
+					}
+				}
+			}
+
 			a.persistMessage(ctx, "assistant", display, turnTokens)
 			a.compactMessages()
 			a.autoCommitGit()
@@ -1043,9 +1088,11 @@ func (a *Agent) runSubAgentInternal(ctx context.Context, task string, prov provi
 	return sub.Send(ctx, task)
 }
 
-// extractBlocks extracts ```md content and ```exec code blocks from an AI response.
+// extractBlocks extracts ```md content, ```exec code blocks, and ```mem blocks from an AI response.
 // Since we enforce exec or md format, md extraction is simple fence stripping.
-func extractBlocks(text string) (string, []string) {
+// mem blocks are only meaningful alongside md (final turn) — they are silently
+// saved to memory without being shown to the user.
+func extractBlocks(text string) (string, []string, []memEntry) {
 	// Extract exec blocks (regex needed since there can be multiple)
 	execMatches := codeBlockRe.FindAllStringSubmatch(text, -1)
 	codeBlocks := make([]string, 0, len(execMatches))
@@ -1056,9 +1103,29 @@ func extractBlocks(text string) (string, []string) {
 		}
 	}
 
-	// Extract md content by stripping fences
+	// Extract mem blocks (group 1 = optional kind, group 2 = content)
+	memMatches := memBlockRe.FindAllStringSubmatch(text, -1)
+	var memBlocks []memEntry
+	for _, m := range memMatches {
+		content := strings.TrimSpace(m[2])
+		if content == "" {
+			continue
+		}
+		kind := strings.TrimSpace(m[1])
+		switch kind {
+		case "core", "learned", "note":
+			// valid
+		default:
+			kind = "learned"
+		}
+		memBlocks = append(memBlocks, memEntry{kind: kind, content: content})
+	}
+
+	// Extract md content by stripping fences.
+	// Strip any mem blocks from the text first so they don't interfere.
+	cleanText := memBlockRe.ReplaceAllString(text, "")
 	var mdContent string
-	trimmed := strings.TrimSpace(text)
+	trimmed := strings.TrimSpace(cleanText)
 	if strings.HasPrefix(trimmed, "```md") {
 		// Strip opening fence line
 		if idx := strings.Index(trimmed, "\n"); idx >= 0 {
@@ -1071,7 +1138,15 @@ func extractBlocks(text string) (string, []string) {
 		}
 	}
 
-	return mdContent, codeBlocks
+	return mdContent, codeBlocks, memBlocks
+}
+
+// truncate returns at most n characters of s, appending "…" if truncated.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 // apiKeyRe matches URL query params that contain API keys.

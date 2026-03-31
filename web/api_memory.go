@@ -44,22 +44,20 @@ func (a *Api) MemoryEntries(r *http.Request) any {
 }
 
 // MemoryEntries_0 handles GET/DELETE /api/memory-entries/:id.
-func (a *Api) MemoryEntries_0(r *http.Request) any {
-	idStr := restruct.Params(r)["0"]
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		return restruct.Error{Status: http.StatusBadRequest, Message: "invalid entry ID"}
-	}
+func (a *Api) MemoryEntries_0_1(r *http.Request) any {
+	params := restruct.Params(r)
+	scope := params["0"]
+	id, _ := strconv.ParseInt(params["1"], 10, 64)
 
 	ctx := r.Context()
-	wsID := a.server.store.Workspace().ID
+	wsID := ""
+	if scope == "workspace" {
+		wsID = a.server.store.Workspace().ID
+	}
 
 	if r.Method == http.MethodDelete {
-		// Try workspace first, then user-level
 		if err := a.server.store.DeleteMemory(ctx, wsID, id); err != nil {
-			if err := a.server.store.DeleteMemory(ctx, "", id); err != nil {
-				return restruct.Error{Status: http.StatusNotFound, Message: "entry not found"}
-			}
+			return restruct.Error{Status: http.StatusNotFound, Message: "entry not found"}
 		}
 		return map[string]string{"status": "deleted"}
 	}
@@ -67,10 +65,7 @@ func (a *Api) MemoryEntries_0(r *http.Request) any {
 	// GET single entry
 	entry, err := a.server.store.GetMemory(ctx, wsID, id)
 	if err != nil {
-		entry, err = a.server.store.GetMemory(ctx, "", id)
-		if err != nil {
-			return restruct.Error{Status: http.StatusNotFound, Message: "entry not found"}
-		}
+		return restruct.Error{Status: http.StatusNotFound, Message: "entry not found"}
 	}
 	return entry
 }
