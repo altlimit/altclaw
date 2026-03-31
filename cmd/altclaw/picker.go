@@ -51,7 +51,7 @@ func (m *pickerModel) loadRecentWorkspaces() {
 	if m.store != nil {
 		if wsList, err := m.store.ListWorkspaces(context.Background()); err == nil {
 			for _, ws := range wsList {
-				if ws.Path != "" {
+				if ws != nil && ws.Path != "" {
 					m.recentWS = append(m.recentWS, ws)
 				}
 			}

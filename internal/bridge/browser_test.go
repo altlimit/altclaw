@@ -211,8 +211,10 @@ func TestDeepElement_ShadowDOM(t *testing.T) {
 	page := browser.MustPage(srv.URL)
 	page.MustWaitLoad()
 
-	// Standard querySelector should NOT find the textarea inside shadow DOM
-	_, stdErr := page.Element("textarea[name='about']")
+	// Standard querySelector should NOT find the textarea inside shadow DOM.
+	// Use a short timeout since this is expected to fail — rod's default
+	// Element() retries forever, which would hang CI for 10+ minutes.
+	_, stdErr := page.Timeout(2 * time.Second).Element("textarea[name='about']")
 	if stdErr == nil {
 		t.Log("Standard Element() found textarea — shadow DOM may not be active in this browser version")
 	}
