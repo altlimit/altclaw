@@ -637,41 +637,12 @@ func buildPageObject(vm *goja.Runtime, page *rod.Page, browser *rod.Browser, wor
 			Throwf(vm, "page.eval error: %v", err)
 		}
 
-		// Try to return structured data instead of raw strings.
-		// For objects/arrays, JSON-serialize in the browser and parse in goja.
-		raw := result.Value.Raw()
-		if raw == nil {
+		// Safely convert the rod result to a goja value via JSON.
+		val := result.Value
+		if val.Nil() {
 			return goja.Undefined()
 		}
-
-		// If the result is a primitive (string, number, bool), return directly
-		switch v := raw.(type) {
-		case string:
-			return vm.ToValue(v)
-		case float64:
-			return vm.ToValue(v)
-		case bool:
-			return vm.ToValue(v)
-		case json.Number:
-			if i, err := v.Int64(); err == nil {
-				return vm.ToValue(i)
-			}
-			if f, err := v.Float64(); err == nil {
-				return vm.ToValue(f)
-			}
-			return vm.ToValue(v.String())
-		}
-
-		// For objects/arrays, re-serialize and parse in goja
-		jsonBytes, err := json.Marshal(raw)
-		if err != nil {
-			return vm.ToValue(result.Value.String())
-		}
-		parsed, err := vm.RunString("(" + string(jsonBytes) + ")")
-		if err != nil {
-			return vm.ToValue(string(jsonBytes))
-		}
-		return parsed
+		return jsonToGoja(vm, val.JSON("", ""))
 	})
 
 	// page.waitFor(selector, timeout?) — pierces shadow DOM via polling
@@ -986,6 +957,54 @@ func sanitizeError(workspace, userDataDir string, err error) string {
 		}
 	}
 	return msg
+}
+
+// jsonToGoja safely converts a JSON string to a goja.Value using json.Unmarshal.
+// This avoids vm.RunString which would be a code-injection vector if the JSON
+// contained crafted payloads from browser-evaluated expressions.
+func jsonToGoja(vm *goja.Runtime, jsonStr string) goja.Value {
+	if jsonStr == "" || jsonStr == "null" || jsonStr == "undefined" {
+		return goja.Undefined()
+	}
+	var parsed interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		// Not valid JSON — return as plain string
+		return vm.ToValue(jsonStr)
+	}
+	return goToGoja(vm, parsed)
+}
+
+// goToGoja recursively converts a Go value (from json.Unmarshal) to a goja.Value.
+func goToGoja(vm *goja.Runtime, v interface{}) goja.Value {
+	if v == nil {
+		return goja.Null()
+	}
+	switch val := v.(type) {
+	case bool:
+		return vm.ToValue(val)
+	case float64:
+		// json.Unmarshal decodes all numbers as float64
+		if val == float64(int64(val)) {
+			return vm.ToValue(int64(val))
+		}
+		return vm.ToValue(val)
+	case string:
+		return vm.ToValue(val)
+	case []interface{}:
+		arr := make([]interface{}, len(val))
+		for i, item := range val {
+			arr[i] = goToGoja(vm, item).Export()
+		}
+		return vm.ToValue(arr)
+	case map[string]interface{}:
+		obj := vm.NewObject()
+		for k, item := range val {
+			obj.Set(k, goToGoja(vm, item))
+		}
+		return obj
+	default:
+		return vm.ToValue(fmt.Sprintf("%v", val))
+	}
 }
 
 // ── Network listener ─────────────────────────────────────────────────
