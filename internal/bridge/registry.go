@@ -25,8 +25,9 @@ const (
 	NameZip    = "zip"
 	NameImage  = "img"
 	NameSSH    = "ssh"
-	NameMail   = "mail"
-	NameChat   = "chat"
+	NameMail    = "mail"
+	NameChat    = "chat"
+	NameBrowser = "browser"
 )
 
 // BuiltinInfo describes a native bridge module available in the JS runtime.
@@ -69,6 +70,7 @@ var Builtins = []BuiltinInfo{
 	{Name: NameSSH, Description: "Remote execution via SSH: ssh.connect → exec, upload, download", ViaRequire: true},
 	{Name: NameMail, Description: "Email via SMTP + IMAP: mail.send, mail.connect → list, read, download, flag, move", ViaRequire: true},
 	{Name: NameChat, Description: "Cross-conversation access: chat.list, chat.read", ViaRequire: true},
+	{Name: NameBrowser, Description: "Headless browser automation: browser.open → page.click, type, eval, screenshot, pdf", ViaRequire: true},
 }
 
 // BuiltinNames returns the set of names that engine's require() shim intercepts

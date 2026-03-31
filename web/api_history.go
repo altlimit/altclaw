@@ -48,3 +48,26 @@ func (a *Api) History(ctx context.Context) any {
 	}
 	return entries
 }
+
+// History_0_Agents returns paginated sub-agent history entries for a chat.
+func (a *Api) History_0_Agents(r *http.Request) any {
+	chatID, _ := strconv.ParseInt(restruct.Params(r)["0"], 10, 64)
+	if chatID == 0 {
+		return restruct.Error{Status: http.StatusBadRequest, Message: "valid chat id required"}
+	}
+	limitStr := r.URL.Query().Get("limit")
+	cursor := r.URL.Query().Get("cursor")
+	limit := 20
+	if limitStr != "" {
+		if v, _ := strconv.Atoi(limitStr); v > 0 {
+			limit = v
+		}
+	}
+
+	chat := &config.Chat{ID: chatID, Workspace: a.server.store.Workspace().ID}
+	entries, nextCursor, err := a.server.store.ListSubAgentHistory(r.Context(), chat, limit, cursor)
+	if err != nil {
+		return restruct.Error{Status: http.StatusInternalServerError, Err: err}
+	}
+	return map[string]any{"entries": entries, "cursor": nextCursor}
+}

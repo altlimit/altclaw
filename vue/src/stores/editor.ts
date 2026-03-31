@@ -7,7 +7,7 @@ export interface OpenFile {
   name: string
   content: string
   isDirty: boolean
-  type: 'file' | 'chat' | 'config' | 'security' | 'media' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'diff' | 'module' | 'csv' | 'settings' | 'providers' | 'provider' | 'logs'
+  type: 'file' | 'chat' | 'config' | 'security' | 'media' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'diff' | 'module' | 'csv' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents'
 }
 
 const mediaExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'mp4', 'webm', 'ogg', 'mp3', 'wav', 'pdf']
@@ -68,7 +68,7 @@ export const useEditorStore = defineStore('editor', () => {
     debounceSaveTabs()
   }
 
-  const openSpecialTab = (type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs', name: string, id?: number) => {
+  const openSpecialTab = (type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents', name: string, id?: number) => {
     const virtualPath = id ? `special://${type}-${id}` : `special://${type}`
     if (!findTab(virtualPath)) {
       tabs.value.push({
@@ -452,7 +452,10 @@ export const useEditorStore = defineStore('editor', () => {
         } else if (t.type === 'module') {
           openModuleTab(t.path, t.name || t.path)
         } else if (t.type && t.type !== 'file' && t.type !== 'diff') {
-          openSpecialTab(t.type as any, t.name || t.type)
+          // Extract embedded ID from paths like "special://sub-agents-42" or "special://provider-5"
+          const idMatch = t.path.match(/^special:\/\/.+?-(\d+)$/)
+          const embeddedId = idMatch ? parseInt(idMatch[1], 10) : undefined
+          openSpecialTab(t.type as any, t.name || t.type, embeddedId)
         }
       }
 

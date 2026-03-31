@@ -12,6 +12,7 @@ import MonacoDiffEditor from '@/components/MonacoDiffEditor.vue'
 import MonacoEditor from '@/components/MonacoEditor.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import SecretPanel from '@/components/SecretPanel.vue'
+import SubAgentPanel from '@/components/SubAgentPanel.vue'
 import ProvidersPanel from '@/components/ProvidersPanel.vue'
 import ProviderConfigPage from '@/pages/ProviderConfigPage.vue'
 import ModuleDetailPage from '@/pages/ModuleDetailPage.vue'
@@ -354,8 +355,8 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
-function openTab(type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs', label: string) {
-  editorStore.openSpecialTab(type, label)
+function openTab(type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents', label: string, id?: number) {
+  editorStore.openSpecialTab(type, label, id)
 }
 
 async function logout() {
@@ -583,6 +584,7 @@ function getLanguage(path: string | null) {
         @close-all="editorStore.closeAll()"
         @reorder="(from, to) => editorStore.moveTab(from, to)"
         @run-js="runScript"
+        @open-sub-agents="(chatId: number) => openTab('sub-agents', `🤖 Sub-Agents #${chatId}`, chatId)"
       />
       <div class="editor-content-wrapper">
         <template v-if="editorStore.getActiveFile()?.type === 'file'">
@@ -678,6 +680,14 @@ function getLanguage(path: string | null) {
         <template v-for="tab in editorStore.getTabs().filter(t => t.type === 'module')" :key="tab.path">
           <div v-if="editorStore.activeFilePath === tab.path" class="tab-pane">
             <ModuleDetailPage :path="tab.path" />
+          </div>
+        </template>
+        <!-- Sub-Agent History tabs (one per open sub-agents:// path) -->
+        <template v-for="tab in editorStore.getTabs().filter(t => t.type === 'sub-agents')" :key="tab.path">
+          <div v-if="editorStore.activeFilePath === tab.path" class="tab-pane">
+            <SubAgentPanel
+              :chat-id="parseInt(tab.path.replace('special://sub-agents-', ''), 10)"
+            />
           </div>
         </template>
       </div>

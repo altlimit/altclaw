@@ -858,6 +858,13 @@ func (s *Store) ListHistoryByTurn(ctx context.Context, chat *Chat, turnID string
 	return entries, err
 }
 
+// ListSubAgentHistory returns paginated sub-agent history entries for a chat.
+func (s *Store) ListSubAgentHistory(ctx context.Context, chat *Chat, limit int, cursor string) ([]*History, string, error) {
+	q := dsorm.NewQuery("History").Ancestor(s.Client.Key(chat)).
+		FilterField("agent_type", "=", "sub-agent").Order("-created").Limit(limit)
+	return dsorm.Query[*History](ctx, s.Client, q, cursor)
+}
+
 // ── Chat CRUD ───────────────────────────────────────────────────────
 
 // CreateChat creates a new chat session.

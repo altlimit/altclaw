@@ -259,7 +259,7 @@ func (a *Agent) SetProviderName(name string) {
 
 // saveToHistory writes a code block to the store for debugging.
 // Returns the history entry ID for display in logs.
-func (a *Agent) saveToHistory(ctx context.Context, code, aiResponse string, iteration, blockNum int) int64 {
+func (a *Agent) saveToHistory(ctx context.Context, code, aiResponse string, iteration, blockNum int, promptTokens, completionTokens int64) int64 {
 	if a.Store == nil {
 		return 0
 	}
@@ -278,6 +278,11 @@ func (a *Agent) saveToHistory(ctx context.Context, code, aiResponse string, iter
 		Provider:      a.resolveProviderName(),
 		Iteration:     iteration,
 		Block:         blockNum,
+	}
+	// Store token counts on the first block of each iteration to avoid double-counting
+	if blockNum == 0 {
+		h.PromptTokens = promptTokens
+		h.CompletionTokens = completionTokens
 	}
 	if err := a.Store.AddHistory(ctx, h); err != nil {
 		return 0
@@ -749,7 +754,7 @@ func (a *Agent) Send(ctx context.Context, userMessage string) (string, error) {
 			}
 
 			// Save to history for debugging (includes AI response)
-			histID := a.saveToHistory(ctx, code, response, i, j)
+			histID := a.saveToHistory(ctx, code, response, i, j, turnTokens.Prompt, turnTokens.Completion)
 
 			if a.OnLog != nil {
 				a.OnLog(fmt.Sprintf("⚡ Running [%d/%d]: #%d", j+1, len(codeBlocks), histID))

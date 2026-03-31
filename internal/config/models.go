@@ -60,17 +60,19 @@ type ChatMessage struct {
 // Namespaced by workspace via model:"ns".
 type History struct {
 	dsorm.Base
-	ID            int64          `model:"id" json:"id"`
-	Chat          *datastore.Key `model:"parent" json:"chat_id,omitempty"`
-	ChatMessageID string         `datastore:"message_id,omitempty" json:"message_id,omitempty"` // links to ChatMessage.ID
-	Code          string         `datastore:"code,noindex,omitempty" json:"code,omitempty"`
-	Result        string         `datastore:"result,noindex,omitempty" json:"result,omitempty"`
-	Response      string         `datastore:"response,noindex,omitempty" json:"response,omitempty"`
-	AgentType     string         `datastore:"agent_type,noindex,omitempty" json:"agent_type,omitempty"`
-	Provider      string         `datastore:"provider,noindex,omitempty" json:"provider,omitempty"`
-	Iteration     int            `datastore:"iteration,noindex,omitempty" json:"iteration,omitempty"`
-	Block         int            `datastore:"block,noindex,omitempty" json:"block,omitempty"`
-	CreatedAt     time.Time      `model:"created" datastore:"created,omitempty" json:"created"`
+	ID               int64          `model:"id" json:"id"`
+	Chat             *datastore.Key `model:"parent" json:"chat_id,omitempty"`
+	ChatMessageID    string         `datastore:"message_id,omitempty" json:"message_id,omitempty"` // links to ChatMessage.ID
+	Code             string         `datastore:"code,noindex,omitempty" json:"code,omitempty"`
+	Result           string         `datastore:"result,noindex,omitempty" json:"result,omitempty"`
+	Response         string         `datastore:"response,noindex,omitempty" json:"response,omitempty"`
+	AgentType        string         `datastore:"agent_type,omitempty" json:"agent_type,omitempty"`
+	Provider         string         `datastore:"provider,noindex,omitempty" json:"provider,omitempty"`
+	Iteration        int            `datastore:"iteration,noindex,omitempty" json:"iteration,omitempty"`
+	Block            int            `datastore:"block,noindex,omitempty" json:"block,omitempty"`
+	PromptTokens     int64          `datastore:"prompt_tokens,noindex,omitempty" json:"prompt_tokens,omitempty"`
+	CompletionTokens int64          `datastore:"completion_tokens,noindex,omitempty" json:"completion_tokens,omitempty"`
+	CreatedAt        time.Time      `model:"created" datastore:"created,omitempty" json:"created"`
 }
 
 // CommonSettings holds settings shared by both AppConfig (user-level defaults)

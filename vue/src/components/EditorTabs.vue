@@ -31,10 +31,17 @@ const emit = defineEmits<{
   (e: 'closeAll'): void
   (e: 'reorder', from: number, to: number): void
   (e: 'run-js', path: string): void
+  (e: 'open-sub-agents', chatId: number): void
 }>()
 
 function isScript(path: string): boolean {
   return !path.startsWith('special://') && path.endsWith('.js')
+}
+
+function chatIdFromTab(tab: { path: string; type: string }): number | null {
+  if (tab.type !== 'chat') return null
+  const m = tab.path.match(/^special:\/\/chat-(\d+)$/)
+  return m?.[1] ? parseInt(m[1], 10) : null
 }
 
 // ── Context Menu ──────────────────────────────────────────────────
@@ -206,6 +213,12 @@ function onDragEnd() {
           @click.stop="emit('run-js', tab.path)"
           title="Run script"
         >▶</button>
+        <button
+          v-if="tab.path === activeTab && chatIdFromTab(tab)"
+          class="sub-agents-btn"
+          @click.stop="emit('open-sub-agents', chatIdFromTab(tab)!)"
+          title="Sub-Agent History"
+        >🤖</button>
         <div class="tab-actions">
           <div class="dirty-dot"></div>
           <button class="close-btn" @click.stop="emit('close', tab.path)">×</button>
@@ -389,6 +402,21 @@ function onDragEnd() {
   line-height: 1;
 }
 .run-btn:hover {
+  opacity: 1;
+  transform: scale(1.2);
+}
+.sub-agents-btn {
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  opacity: 0.7;
+  flex-shrink: 0;
+  transition: opacity 0.15s, transform 0.1s;
+  line-height: 1;
+}
+.sub-agents-btn:hover {
   opacity: 1;
   transform: scale(1.2);
 }

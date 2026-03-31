@@ -483,6 +483,8 @@ async function stopExecution() {
   })
 }
 
+
+
 async function answerConfirm(approved: boolean) {
   if (!pendingConfirm.value) return
   const label = pendingConfirm.value.label
@@ -980,6 +982,7 @@ onUnmounted(() => {
         <button v-if="sending && !pendingAsk && !pendingConfirm" class="btn btn-stop" @click="stopExecution" title="Stop execution">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2" /></svg>
         </button>
+
         <button class="btn btn-primary send-btn" :disabled="providerStore.noProviders" @click="send">▶</button>
       </div>
     </div>
@@ -1297,6 +1300,7 @@ onUnmounted(() => {
 .btn-stop:hover {
   opacity: 0.8;
 }
+
 .load-older-btn {
   display: block;
   width: 100%;
