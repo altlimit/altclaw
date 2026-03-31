@@ -24,7 +24,6 @@ import (
 	"altclaw.ai/internal/cron"
 	"altclaw.ai/internal/engine"
 	"altclaw.ai/internal/executor"
-	"altclaw.ai/internal/util"
 	"github.com/dop251/goja"
 )
 
@@ -563,17 +562,6 @@ func extractResponse(vm *goja.Runtime, val goja.Value) *responseData {
 // reqPath is the URL path that was matched (for process.script and sticky chat).
 // params contains any dynamic route parameters extracted by ResolveRoute.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, scriptPath, reqPath string, params map[string]string) {
-	// Enforce IP whitelist if configured (joined user + workspace lists)
-	var ipWhitelist []string
-	if h.Store != nil {
-		ipWhitelist = h.Store.Settings().IPWhitelist()
-	}
-	if len(ipWhitelist) > 0 {
-		if !util.MatchIPWhitelist(util.ClientIP(r), ipWhitelist) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), h.Timeout)
 	defer cancel()

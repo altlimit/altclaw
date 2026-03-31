@@ -54,5 +54,5 @@ func SanitizePath(workspace, path string) (string, error) {
 	if strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("path escapes workspace: %s", path)
 	}
-	return abs, nil
+	return realPath, nil
 }

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"altclaw.ai/internal/buildinfo"
 	"altclaw.ai/internal/config"
@@ -85,20 +84,21 @@ func (a *Api) Provider_0(r *http.Request) any {
 }
 
 // Models lists available models for a provider type + credentials.
-func (a *Api) Models(r *http.Request) any {
-	q := r.URL.Query()
-	provType := q.Get("provider")
+func (a *Api) Models(ctx context.Context, req struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key"`
+	BaseURL  string `json:"base_url"`
+	Host     string `json:"host"`
+}) any {
+	provType := req.Provider
 	if provType == "" {
 		return restruct.Error{Status: http.StatusBadRequest, Message: "provider is required"}
 	}
 
-	prov, err := provider.Build(provType, q.Get("api_key"), "", q.Get("base_url"), q.Get("host"))
+	prov, err := provider.Build(provType, req.APIKey, "", req.BaseURL, req.Host)
 	if err != nil {
 		return restruct.Error{Status: http.StatusBadRequest, Message: err.Error()}
 	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
 
 	models, err := prov.ListModels(ctx)
 	if err != nil {

@@ -4,6 +4,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -158,11 +159,11 @@ func RegisterFetch(vm *goja.Runtime, store *config.Store, workspace string, ctxF
 			return vm.ToValue(bodyStr)
 		})
 		result.Set("json", func(call goja.FunctionCall) goja.Value {
-			v, err := vm.RunString("(" + bodyStr + ")")
-			if err != nil {
+			var parsed interface{}
+			if err := json.Unmarshal([]byte(bodyStr), &parsed); err != nil {
 				logErr(vm, "fetch.json", err)
 			}
-			return v
+			return vm.ToValue(parsed)
 		})
 
 		return result

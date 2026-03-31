@@ -67,6 +67,7 @@ async function loginWithPasskey() {
 
     // 2. Convert options for navigator.credentials.get
     const publicKey = options.publicKey
+    const challengeKey = publicKey.challenge // capture before decode
     publicKey.challenge = base64urlToBuffer(publicKey.challenge)
     if (publicKey.allowCredentials) {
       publicKey.allowCredentials = publicKey.allowCredentials.map((c: any) => ({
@@ -94,7 +95,7 @@ async function loginWithPasskey() {
       },
     })
 
-    const finishResp = await fetch('/api/passkey-login-finish', {
+    const finishResp = await fetch(`/api/passkey-login-finish?challenge=${encodeURIComponent(challengeKey)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,

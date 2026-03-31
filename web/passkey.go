@@ -133,8 +133,9 @@ func (a *Api) PasskeyRegisterBegin(w http.ResponseWriter, r *http.Request) any {
 		return restruct.Error{Status: http.StatusInternalServerError, Err: err}
 	}
 
+	challengeKey := session.Challenge
 	a.server.mu.Lock()
-	a.server.passkeySession = session
+	a.server.passkeySessions[challengeKey] = session
 	a.server.mu.Unlock()
 
 	return creation
@@ -147,9 +148,10 @@ func (a *Api) PasskeyRegisterFinish(w http.ResponseWriter, r *http.Request) any 
 		return restruct.Error{Status: http.StatusInternalServerError, Err: err}
 	}
 
+	challengeKey := r.URL.Query().Get("challenge")
 	a.server.mu.Lock()
-	session := a.server.passkeySession
-	a.server.passkeySession = nil
+	session := a.server.passkeySessions[challengeKey]
+	delete(a.server.passkeySessions, challengeKey)
 	a.server.mu.Unlock()
 
 	if session == nil {
@@ -198,8 +200,9 @@ func (a *Api) PasskeyLoginBegin(w http.ResponseWriter, r *http.Request) any {
 		return restruct.Error{Status: http.StatusInternalServerError, Err: err}
 	}
 
+	challengeKey := session.Challenge
 	a.server.mu.Lock()
-	a.server.passkeySession = session
+	a.server.passkeySessions[challengeKey] = session
 	a.server.mu.Unlock()
 
 	return assertion
@@ -212,9 +215,10 @@ func (a *Api) PasskeyLoginFinish(w http.ResponseWriter, r *http.Request) any {
 		return restruct.Error{Status: http.StatusInternalServerError, Err: err}
 	}
 
+	challengeKey := r.URL.Query().Get("challenge")
 	a.server.mu.Lock()
-	session := a.server.passkeySession
-	a.server.passkeySession = nil
+	session := a.server.passkeySessions[challengeKey]
+	delete(a.server.passkeySessions, challengeKey)
 	a.server.mu.Unlock()
 
 	if session == nil {

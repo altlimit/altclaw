@@ -28,6 +28,7 @@ import (
 	"altclaw.ai/internal/executor"
 	"altclaw.ai/internal/mcp"
 	"altclaw.ai/internal/serverjs"
+	"altclaw.ai/internal/util"
 	"github.com/altlimit/restruct"
 	"github.com/fsnotify/fsnotify"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -157,20 +158,20 @@ type Server struct {
 	Api Api
 	App App `route:"app"`
 
-	chats          map[int64]*chatSession // chatID → session
-	hub            *EventHub
-	store          *config.Store
-	logBuf         *bridge.LogBuffer
-	cronMgr        *cron.Manager
-	password       string
-	sessions       map[string]time.Time
-	rateLimits     map[string][]time.Time // IP -> failed login timestamps
-	passkeySession *webauthn.SessionData  // transient WebAuthn session
-	tunnel         *tunnelState
-	serverJS       *serverjs.Handler
-	mcpServer      *mcp.Server
-	GUIMode        bool // When true, skip auth for localhost (Wails webview)
-	mu             sync.Mutex
+	chats    map[int64]*chatSession // chatID → session
+	hub      *EventHub
+	store    *config.Store
+	logBuf   *bridge.LogBuffer
+	cronMgr  *cron.Manager
+	password string
+	sessions map[string]time.Time
+
+	passkeySessions map[string]*webauthn.SessionData // challenge → session
+	tunnel          *tunnelState
+	serverJS        *serverjs.Handler
+	mcpServer       *mcp.Server
+	GUIMode         bool // When true, skip auth for localhost (Wails webview)
+	mu              sync.Mutex
 
 	// Exec is the shared executor instance (Docker/Podman/Local) used by
 	// RunScript to avoid creating a new container per invocation.
@@ -185,15 +186,15 @@ type Server struct {
 func NewServer(ag *agent.Agent, store *config.Store, ws *config.Workspace, cronMgr *cron.Manager, logBuf *bridge.LogBuffer, newAgent func(providerName string) (*agent.Agent, error)) *Server {
 	password := generatePassword()
 	s := &Server{
-		chats:      make(map[int64]*chatSession),
-		hub:        NewEventHub(),
-		store:      store,
-		logBuf:     logBuf,
-		cronMgr:    cronMgr,
-		password:   password,
-		sessions:   make(map[string]time.Time),
-		rateLimits: make(map[string][]time.Time),
-		NewAgent:   newAgent,
+		chats:           make(map[int64]*chatSession),
+		hub:             NewEventHub(),
+		store:           store,
+		logBuf:          logBuf,
+		cronMgr:         cronMgr,
+		password:        password,
+		sessions:        make(map[string]time.Time),
+		passkeySessions: make(map[string]*webauthn.SessionData),
+		NewAgent:        newAgent,
 	}
 	s.Api.server = s
 	s.App.server = s
@@ -239,8 +240,9 @@ func (s *Server) Password() string {
 func (s *Server) rotatePassword() {
 	s.mu.Lock()
 	s.password = generatePassword()
+	pw := s.password
 	s.mu.Unlock()
-	slog.Info("password rotated after login", "password", s.password)
+	fmt.Fprintf(os.Stderr, "Password: %s\n", pw)
 }
 
 // isLocalRequest returns true when the request originates from localhost
@@ -279,6 +281,14 @@ func (s *Server) Init(h *restruct.Handler) {
 func (s *Server) servePublic(w http.ResponseWriter, r *http.Request) {
 	ws := s.store.Workspace()
 	if ws.PublicDir != "" {
+		// Enforce IP whitelist for all public traffic (static files + server.js)
+		if ipWhitelist := s.store.Settings().IPWhitelist(); len(ipWhitelist) > 0 {
+			if !util.MatchIPWhitelist(util.ClientIP(r), ipWhitelist) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+		}
+
 		publicPath := ws.PublicDir
 		if !filepath.IsAbs(publicPath) {
 			publicPath = filepath.Join(ws.Path, publicPath)
@@ -376,7 +386,8 @@ func (s *Server) Start(addr string, onReady func(actualAddr string)) error {
 	actualPort := ln.Addr().(*net.TCPAddr).Port
 	actualAddr := fmt.Sprintf(":%d", actualPort)
 
-	slog.Info("web UI started", "addr", "http://localhost"+actualAddr, "password", s.password)
+	slog.Info("web UI started", "addr", "http://localhost"+actualAddr)
+	fmt.Fprintf(os.Stderr, "Password: %s\n", s.password)
 
 	restruct.Handle("/", s)
 
@@ -567,9 +578,10 @@ func (s *Server) Auth_HubLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	sig, tsStr := parts[0], parts[1]
 
-	// Check timestamp (60 second window)
+	// Check timestamp (60 second window, reject future timestamps beyond 5s skew)
 	ts, err := strconv.ParseInt(tsStr, 10, 64)
-	if err != nil || time.Now().Unix()-ts > 60 {
+	diff := time.Now().Unix() - ts
+	if err != nil || diff > 60 || diff < -5 {
 		http.Error(w, "Token expired", http.StatusForbidden)
 		return
 	}

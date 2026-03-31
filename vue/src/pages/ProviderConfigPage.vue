@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { useEventStore } from '@/stores/events'
 import { useToast } from '@/composables/useToast'
-import { onMounted, ref, watch, computed } from 'vue'
+import { useEventStore } from '@/stores/events'
+import { computed, onMounted, ref, watch } from 'vue'
 
 interface DocInfo {
   name: string
@@ -134,12 +134,17 @@ async function fetchModels() {
   modelsError.value = ''
   models.value = []
   try {
-    const params = new URLSearchParams({ provider: providerType.value })
-    if (apiKey.value) params.set('api_key', apiKey.value)
-    if (baseUrl.value) params.set('base_url', baseUrl.value)
-    if (host.value) params.set('host', host.value)
-    const resp = await fetch('/api/models?' + params.toString())
-    if (!resp.ok) throw new Error(await resp.text() || resp.statusText)
+    const resp = await fetch('/api/models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider: providerType.value,
+        api_key: apiKey.value,
+        base_url: baseUrl.value,
+        host: host.value,
+      }),
+    })
+    if (!resp.ok) throw new Error(await parseError(resp))
     const data = await resp.json()
     models.value = data.models || []
     showModels.value = true

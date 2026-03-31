@@ -45,9 +45,14 @@ func (a *Api) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		a.server.mu.Lock()
-		_, valid := a.server.sessions[cookie.Value]
+		created, valid := a.server.sessions[cookie.Value]
+		if valid && time.Since(created) > 30*24*time.Hour {
+			delete(a.server.sessions, cookie.Value)
+			valid = false
+		}
 		a.server.mu.Unlock()
 		if !valid {
+			clearSessionCookie(w, r)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

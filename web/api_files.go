@@ -251,5 +251,5 @@ func checkPathSafe(workspace, target string) (string, error) {
 	if strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("path escapes workspace")
 	}
-	return absDir, nil
+	return realPath, nil
 }

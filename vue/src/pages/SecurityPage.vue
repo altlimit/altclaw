@@ -51,6 +51,7 @@ async function registerPasskey() {
 
     // 2. Convert options for navigator.credentials.create
     const publicKey = options.publicKey
+    const challengeKey = publicKey.challenge // capture before decode
     publicKey.challenge = base64urlToBuffer(publicKey.challenge)
     publicKey.user.id = base64urlToBuffer(publicKey.user.id)
     if (publicKey.excludeCredentials) {
@@ -78,7 +79,7 @@ async function registerPasskey() {
     })
 
     const name = encodeURIComponent(newName.value || 'Passkey')
-    const finishResp = await fetch(`/api/passkey-register-finish?name=${name}`, {
+    const finishResp = await fetch(`/api/passkey-register-finish?name=${name}&challenge=${encodeURIComponent(challengeKey)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body,
