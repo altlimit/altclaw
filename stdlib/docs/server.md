@@ -15,7 +15,8 @@
 ```js
 module.exports = function(req) {
   if (req.method === "POST") {
-    fs.append("data.json", JSON.stringify(req.body) + "\n");
+    var data = req.json();
+    fs.append("data.json", JSON.stringify(data) + "\n");
     return Response.json({ok: true});
   }
   return Response.sendFile("public/form.html");
@@ -27,7 +28,52 @@ module.exports = function(req) {
 * req.url / req.path: string
 * req.params: object — dynamic route parameters (e.g., {id: "123"} from [id].server.js)
 * req.query / req.headers: object
-* req.body: object (auto-parsed for JSON & urlencoded) | string otherwise
+
+[ Body Methods — Lazy, Fetch-Style ]
+Body is read on first call and cached. Choose the method that matches your content:
+
+* req.text() → string — raw body as text
+* req.json() → object — parsed JSON body
+* req.bytes() → ArrayBuffer — raw body as binary
+* req.form() → object — parsed form data (urlencoded or multipart)
+
+For multipart/form-data, req.form() returns text fields as strings and files as file handles:
+
+[ File Handle (from multipart req.form()) ]
+* file.name: string — form field name
+* file.filename: string — original filename
+* file.size: number — file size in bytes
+* file.type: string — MIME type (e.g., "image/png")
+* file.save(path) → {bytes, file} — stream to workspace (constant memory)
+* file.text() → string — read content as text (32MB limit)
+* file.bytes() → ArrayBuffer — read content as binary (32MB limit)
+
+Single file → object, multiple files with same name → array of objects.
+
+Example: JSON API
+```js
+module.exports = function(req) {
+  var data = req.json();
+  return Response.json({received: data.name});
+}
+```
+
+Example: File upload
+```js
+module.exports = function(req) {
+  var form = req.form();
+  form.avatar.save("./uploads/" + form.avatar.filename);
+  return Response.json({ok: true, name: form.avatar.filename, size: form.avatar.size});
+}
+```
+
+Example: URL-encoded form
+```js
+module.exports = function(req) {
+  var form = req.form();
+  return Response.json({user: form.username, email: form.email});
+}
+```
 
 [ Response — Global Constructor ]
 Follows Web Fetch API pattern. Return a Response from your handler function.

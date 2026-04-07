@@ -617,7 +617,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, scriptPath, 
 	}
 
 	// Build req object
-	reqObj := buildReq(vm, r, params)
+	reqObj := buildReq(vm, r, params, h.Workspace)
 
 	// Call handler(req) with timeout enforcement.
 	type callResult struct {
@@ -696,7 +696,7 @@ func (h *Handler) createEngine() *engine.Engine {
 }
 
 // buildReq creates the req object from an http.Request.
-func buildReq(vm *goja.Runtime, r *http.Request, params map[string]string) *goja.Object {
+func buildReq(vm *goja.Runtime, r *http.Request, params map[string]string, workspace string) *goja.Object {
 	req := vm.NewObject()
 
 	// Set route params (from dynamic segments like [id] and [...path])
@@ -732,43 +732,194 @@ func buildReq(vm *goja.Runtime, r *http.Request, params map[string]string) *goja
 	}
 	req.Set("headers", headers)
 
-	// Body (read for POST/PUT/PATCH/DELETE)
-	// Auto-parsed based on Content-Type: JSON → object, form-urlencoded → object, else → raw string
-	if r.Body != nil && (r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" || r.Method == "DELETE") {
-		bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 10*1024*1024)) // 10MB limit
-		r.Body.Close()
-		if err == nil && len(bodyBytes) > 0 {
-			ct := r.Header.Get("Content-Type")
-			if strings.Contains(ct, "application/json") {
-				// Parse JSON body into object
-				var parsed interface{}
-				if json.Unmarshal(bodyBytes, &parsed) == nil {
-					req.Set("body", parsed)
-				} else {
-					req.Set("body", string(bodyBytes))
-				}
-			} else if strings.Contains(ct, "application/x-www-form-urlencoded") {
-				// Parse form-urlencoded body into object
-				formObj := vm.NewObject()
-				pairs := strings.Split(string(bodyBytes), "&")
-				for _, pair := range pairs {
-					kv := strings.SplitN(pair, "=", 2)
-					if len(kv) == 2 {
-						key, _ := url.QueryUnescape(kv[0])
-						val, _ := url.QueryUnescape(kv[1])
-						formObj.Set(key, val)
+	// Body — lazy, fetch-style methods on the request object.
+	// Body bytes are read once on first access and cached. Multipart uses
+	// Go's ParseMultipartForm for efficient streaming with temp files.
+	//   req.text()  → raw body as string
+	//   req.json()  → parsed JSON object
+	//   req.bytes() → body as ArrayBuffer
+	//   req.form()  → parsed form data (urlencoded or multipart with file handles)
+	var bodyBytes []byte
+	var bodyRead bool
+
+	readBody := func() []byte {
+		if bodyRead {
+			return bodyBytes
+		}
+		bodyRead = true
+		if r.Body != nil {
+			data, err := io.ReadAll(io.LimitReader(r.Body, 32*1024*1024))
+			r.Body.Close()
+			if err == nil {
+				bodyBytes = data
+			}
+		}
+		return bodyBytes
+	}
+
+	req.Set("text", func(call goja.FunctionCall) goja.Value {
+		return vm.ToValue(string(readBody()))
+	})
+
+	req.Set("json", func(call goja.FunctionCall) goja.Value {
+		data := readBody()
+		if len(data) == 0 {
+			return goja.Null()
+		}
+		var parsed interface{}
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			bridge.Throwf(vm, "req.json: %s", err)
+		}
+		return vm.ToValue(parsed)
+	})
+
+	req.Set("bytes", func(call goja.FunctionCall) goja.Value {
+		data := readBody()
+		return vm.ToValue(vm.NewArrayBuffer(data))
+	})
+
+	req.Set("form", func(call goja.FunctionCall) goja.Value {
+		ct := r.Header.Get("Content-Type")
+		formObj := vm.NewObject()
+
+		if strings.Contains(ct, "multipart/form-data") {
+			// Multipart: use Go's efficient parser (temp-files large parts)
+			if err := r.ParseMultipartForm(32 << 20); err != nil {
+				bridge.Throwf(vm, "req.form: %s", err)
+			}
+			if r.MultipartForm == nil {
+				return formObj
+			}
+
+			// Text fields
+			for key, vals := range r.MultipartForm.Value {
+				// Handle name[] convention: strip brackets, always array
+				if strings.HasSuffix(key, "[]") {
+					ivals := make([]interface{}, len(vals))
+					for i, v := range vals {
+						ivals[i] = v
 					}
+					formObj.Set(strings.TrimSuffix(key, "[]"), ivals)
+				} else if len(vals) == 1 {
+					formObj.Set(key, vals[0])
+				} else {
+					ivals := make([]interface{}, len(vals))
+					for i, v := range vals {
+						ivals[i] = v
+					}
+					formObj.Set(key, ivals)
 				}
-				req.Set("body", formObj)
-			} else {
-				req.Set("body", string(bodyBytes))
+			}
+
+			// File fields — expose as handle objects
+			for key, fileHeaders := range r.MultipartForm.File {
+				var fileObjs []interface{}
+				for _, fh := range fileHeaders {
+					fileObj := vm.NewObject()
+					fileObj.Set("name", key)
+					fileObj.Set("filename", fh.Filename)
+					fileObj.Set("size", fh.Size)
+					fileObj.Set("type", fh.Header.Get("Content-Type"))
+
+					capturedFH := fh
+
+					// save(path) — stream file to workspace (constant memory)
+					fileObj.Set("save", func(call goja.FunctionCall) goja.Value {
+						if len(call.Arguments) < 1 {
+							bridge.Throw(vm, "file.save requires a path argument")
+						}
+						destPath := call.Arguments[0].String()
+						absPath, err := bridge.SanitizePath(workspace, destPath)
+						if err != nil {
+							bridge.Throwf(vm, "file.save: %s", err)
+						}
+
+						src, err := capturedFH.Open()
+						if err != nil {
+							bridge.Throwf(vm, "file.save: %s", err)
+						}
+						defer src.Close()
+
+						if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+							bridge.Throwf(vm, "file.save: %s", err)
+						}
+						dst, err := os.Create(absPath)
+						if err != nil {
+							bridge.Throwf(vm, "file.save: %s", err)
+						}
+						defer dst.Close()
+
+						n, err := io.Copy(dst, src)
+						if err != nil {
+							bridge.Throwf(vm, "file.save: %s", err)
+						}
+
+						result := vm.NewObject()
+						result.Set("bytes", n)
+						result.Set("file", destPath)
+						return result
+					})
+
+					// text() — read file content as string
+					fileObj.Set("text", func(call goja.FunctionCall) goja.Value {
+						src, err := capturedFH.Open()
+						if err != nil {
+							bridge.Throwf(vm, "file.text: %s", err)
+						}
+						defer src.Close()
+						data, err := io.ReadAll(io.LimitReader(src, 32*1024*1024))
+						if err != nil {
+							bridge.Throwf(vm, "file.text: %s", err)
+						}
+						return vm.ToValue(string(data))
+					})
+
+					// bytes() — read file content as ArrayBuffer
+					fileObj.Set("bytes", func(call goja.FunctionCall) goja.Value {
+						src, err := capturedFH.Open()
+						if err != nil {
+							bridge.Throwf(vm, "file.bytes: %s", err)
+						}
+						defer src.Close()
+						data, err := io.ReadAll(io.LimitReader(src, 32*1024*1024))
+						if err != nil {
+							bridge.Throwf(vm, "file.bytes: %s", err)
+						}
+						return vm.ToValue(vm.NewArrayBuffer(data))
+					})
+
+					fileObjs = append(fileObjs, fileObj)
+				}
+
+				if len(fileObjs) == 1 {
+					formObj.Set(key, fileObjs[0])
+				} else {
+					formObj.Set(key, fileObjs)
+				}
+			}
+
+		} else if strings.Contains(ct, "application/x-www-form-urlencoded") {
+			data := readBody()
+			parsed, err := url.ParseQuery(string(data))
+			if err != nil {
+				bridge.Throwf(vm, "req.form: %s", err)
+			}
+			for key, vals := range parsed {
+				// Handle name[] convention: strip brackets, always array
+				if strings.HasSuffix(key, "[]") {
+					formObj.Set(strings.TrimSuffix(key, "[]"), vals)
+				} else if len(vals) == 1 {
+					formObj.Set(key, vals[0])
+				} else {
+					formObj.Set(key, vals)
+				}
 			}
 		} else {
-			req.Set("body", "")
+			bridge.Throwf(vm, "req.form: unsupported content type %q", ct)
 		}
-	} else {
-		req.Set("body", "")
-	}
+
+		return formObj
+	})
 
 	return req
 }

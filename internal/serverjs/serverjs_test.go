@@ -1,7 +1,10 @@
 package serverjs
 
 import (
+	"bytes"
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -58,7 +61,8 @@ func TestServeHTTP_PostBody(t *testing.T) {
 	scriptPath := filepath.Join(publicDir, "echo.server.js")
 	os.WriteFile(scriptPath, []byte(`
 module.exports = function(req) {
-	return Response.json({received: req.body.name, method: req.method})
+	var body = req.json();
+	return Response.json({received: body.name, method: req.method})
 }
 `), 0644)
 
@@ -90,7 +94,8 @@ func TestServeHTTP_FormBody(t *testing.T) {
 	scriptPath := filepath.Join(publicDir, "form.server.js")
 	os.WriteFile(scriptPath, []byte(`
 module.exports = function(req) {
-	return Response.json({name: req.body.name, email: req.body.email})
+	var body = req.form();
+	return Response.json({name: body.name, email: body.email})
 }
 `), 0644)
 
@@ -361,7 +366,8 @@ func TestServeHTTP_ReturnObject(t *testing.T) {
 	scriptPath := filepath.Join(publicDir, "api.server.js")
 	os.WriteFile(scriptPath, []byte(`
 module.exports = function(req) {
-	return {message: "created", name: req.body.name}
+	var body = req.json();
+	return {message: "created", name: body.name}
 }
 `), 0644)
 
@@ -707,5 +713,382 @@ module.exports = function(req) {
 	bodyStr := string(body)
 	if !strings.Contains(bodyStr, `"id":"42"`) {
 		t.Errorf("expected id:42 in response, got %q", bodyStr)
+	}
+}
+
+// --- Body Method Tests ---
+
+func TestServeHTTP_ReqText(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "rawtext.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	return Response.json({raw: req.text()})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	req := httptest.NewRequest("POST", "/rawtext", strings.NewReader("hello raw world"))
+	req.Header.Set("Content-Type", "text/plain")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/rawtext", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `"raw":"hello raw world"`) {
+		t.Errorf("expected raw text in response, got %q", string(body))
+	}
+}
+
+func TestServeHTTP_ReqBytes(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "rawbytes.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var buf = req.bytes();
+	var view = new Uint8Array(buf);
+	return Response.json({length: view.length, first: view[0]})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	req := httptest.NewRequest("POST", "/rawbytes", strings.NewReader("AB"))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/rawbytes", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, `"length":2`) {
+		t.Errorf("expected length:2, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"first":65`) {
+		t.Errorf("expected first:65 (ASCII 'A'), got %q", bodyStr)
+	}
+}
+
+func TestServeHTTP_FormDuplicateKeys(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "dupes.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var f = req.form();
+	return Response.json({color: f.color})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	req := httptest.NewRequest("POST", "/dupes", strings.NewReader("color=red&color=blue"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/dupes", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	bodyStr := string(body)
+	// Should be an array ["red","blue"]
+	if !strings.Contains(bodyStr, `"red"`) || !strings.Contains(bodyStr, `"blue"`) {
+		t.Errorf("expected array with red and blue, got %q", bodyStr)
+	}
+}
+
+func TestServeHTTP_FormBracketConvention(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "brackets.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var f = req.form();
+	return Response.json({tags: f.tags, name: f.name})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	// tags[] should be stripped to "tags" and always array, even with one value
+	req := httptest.NewRequest("POST", "/brackets", strings.NewReader("tags[]=go&tags[]=js&name=test"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/brackets", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, `"go"`) || !strings.Contains(bodyStr, `"js"`) {
+		t.Errorf("expected tags array with go and js, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"name":"test"`) {
+		t.Errorf("expected name:test, got %q", bodyStr)
+	}
+}
+
+func TestServeHTTP_FormBracketSingleValue(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "bracket1.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var f = req.form();
+	// tags[] with one value should still be an array
+	var isArray = Array.isArray(f.tags);
+	return Response.json({isArray: isArray, tags: f.tags})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	req := httptest.NewRequest("POST", "/bracket1", strings.NewReader("tags[]=only"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/bracket1", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, `"isArray":true`) {
+		t.Errorf("expected tags[] with one value to be array, got %q", bodyStr)
+	}
+}
+
+func TestServeHTTP_MultipartFileSave(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+	os.MkdirAll(filepath.Join(workspace, "uploads"), 0755)
+
+	scriptPath := filepath.Join(publicDir, "upload.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var f = req.form();
+	var result = f.doc.save("uploads/" + f.doc.filename);
+	return Response.json({
+		filename: f.doc.filename,
+		size: f.doc.size,
+		description: f.description,
+		saved: result.bytes
+	})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	// Build multipart body
+	var buf bytes.Buffer
+	mpw := multipart.NewWriter(&buf)
+	mpw.WriteField("description", "Test upload")
+	part, _ := mpw.CreateFormFile("doc", "test.txt")
+	part.Write([]byte("file content here"))
+	mpw.Close()
+
+	req := httptest.NewRequest("POST", "/upload", &buf)
+	req.Header.Set("Content-Type", mpw.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/upload", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, `"filename":"test.txt"`) {
+		t.Errorf("expected filename:test.txt, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"description":"Test upload"`) {
+		t.Errorf("expected description, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"saved":17`) {
+		t.Errorf("expected saved:17 bytes, got %q", bodyStr)
+	}
+
+	// Verify file was actually saved
+	saved, err := os.ReadFile(filepath.Join(workspace, "uploads", "test.txt"))
+	if err != nil {
+		t.Fatalf("saved file not found: %v", err)
+	}
+	if string(saved) != "file content here" {
+		t.Errorf("expected 'file content here', got %q", string(saved))
+	}
+}
+
+func TestServeHTTP_MultipartFileText(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "filetext.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var f = req.form();
+	var content = f.doc.text();
+	return Response.json({content: content, type: f.doc.type})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	var buf bytes.Buffer
+	mpw := multipart.NewWriter(&buf)
+	part, _ := mpw.CreateFormFile("doc", "readme.md")
+	part.Write([]byte("# Hello"))
+	mpw.Close()
+
+	req := httptest.NewRequest("POST", "/filetext", &buf)
+	req.Header.Set("Content-Type", mpw.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/filetext", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	if !strings.Contains(string(body), `"content":"# Hello"`) {
+		t.Errorf("expected file text content, got %q", string(body))
+	}
+}
+
+func TestServeHTTP_MultipartFileBytes(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "filebytes.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var f = req.form();
+	var buf = f.bin.bytes();
+	var view = new Uint8Array(buf);
+	return Response.json({len: view.length, first: view[0], last: view[view.length-1]})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	var buf bytes.Buffer
+	mpw := multipart.NewWriter(&buf)
+	part, _ := mpw.CreateFormFile("bin", "data.bin")
+	part.Write([]byte{0xDE, 0xAD, 0xBE, 0xEF})
+	mpw.Close()
+
+	req := httptest.NewRequest("POST", "/filebytes", &buf)
+	req.Header.Set("Content-Type", mpw.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/filebytes", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, `"len":4`) {
+		t.Errorf("expected len:4, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, fmt.Sprintf(`"first":%d`, 0xDE)) {
+		t.Errorf("expected first:222 (0xDE), got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, fmt.Sprintf(`"last":%d`, 0xEF)) {
+		t.Errorf("expected last:239 (0xEF), got %q", bodyStr)
+	}
+}
+
+func TestServeHTTP_MultipartMultipleFiles(t *testing.T) {
+	workspace := t.TempDir()
+	publicDir := filepath.Join(workspace, "public")
+	os.MkdirAll(publicDir, 0755)
+
+	scriptPath := filepath.Join(publicDir, "multifile.server.js")
+	os.WriteFile(scriptPath, []byte(`
+module.exports = function(req) {
+	var f = req.form();
+	var isArray = Array.isArray(f.files);
+	var names = [];
+	for (var i = 0; i < f.files.length; i++) {
+		names.push(f.files[i].filename);
+	}
+	return Response.json({isArray: isArray, count: f.files.length, names: names})
+}
+`), 0644)
+
+	h := NewHandler(nil, workspace, publicDir, nil, nil, nil, "test", &config.Workspace{Path: workspace})
+
+	var buf bytes.Buffer
+	mpw := multipart.NewWriter(&buf)
+	p1, _ := mpw.CreateFormFile("files", "a.txt")
+	p1.Write([]byte("aaa"))
+	p2, _ := mpw.CreateFormFile("files", "b.txt")
+	p2.Write([]byte("bbb"))
+	mpw.Close()
+
+	req := httptest.NewRequest("POST", "/multifile", &buf)
+	req.Header.Set("Content-Type", mpw.FormDataContentType())
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req, scriptPath, "/multifile", nil)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	bodyStr := string(body)
+	if !strings.Contains(bodyStr, `"isArray":true`) {
+		t.Errorf("expected files to be array, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"count":2`) {
+		t.Errorf("expected count:2, got %q", bodyStr)
+	}
+	if !strings.Contains(bodyStr, `"a.txt"`) || !strings.Contains(bodyStr, `"b.txt"`) {
+		t.Errorf("expected both filenames, got %q", bodyStr)
 	}
 }

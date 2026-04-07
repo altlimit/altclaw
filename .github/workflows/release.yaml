@@ -120,7 +120,7 @@ jobs:
             altclaw-cli-windows.zip
             ${{ matrix.artifact_name }}.tgz
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 1
 
   build-gui:
     name: GUI ${{ matrix.platform }}
@@ -218,7 +218,7 @@ jobs:
             altclaw-gui-windows.zip
             ${{ matrix.artifact_name }}.tgz
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 1
 
   release:
     name: Create Release

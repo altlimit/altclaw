@@ -378,6 +378,7 @@ func New(ws *config.Workspace, exec executor.Executor, uiHandler bridge.UIHandle
 		}
 		return context.Background()
 	}
+	bridge.RegisterFormData(vm, ws.Path)
 	bridge.RegisterFetch(vm, store, ws.Path, broadcastCtx)
 	bridge.RegisterFS(vm, ws.Path, ws, uiHandler, store)
 	bridge.RegisterCSV(vm, ws.Path)
