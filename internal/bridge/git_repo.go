@@ -102,6 +102,17 @@ func resolveGitAuth(store *config.Store, remoteURL string, authObj *goja.Object,
 
 	urlLower := strings.ToLower(remoteURL)
 
+	// SSH key fallback for git@ URLs
+	if strings.HasPrefix(urlLower, "git@") || strings.Contains(urlLower, "ssh://") {
+		if keyPEM := trySecret("SSH_KEY"); keyPEM != "" {
+			auth, err := gitssh.NewPublicKeys("git", []byte(keyPEM), "")
+			if err == nil {
+				sshSetHostKeyCallback(auth)
+				return auth
+			}
+		}
+	}
+
 	// Match by host
 	if strings.Contains(urlLower, "github.com") {
 		if token := trySecret("GITHUB_TOKEN"); token != "" {
@@ -118,17 +129,6 @@ func resolveGitAuth(store *config.Store, remoteURL string, authObj *goja.Object,
 	if strings.HasPrefix(urlLower, "https://") || strings.HasPrefix(urlLower, "http://") {
 		if token := trySecret("GIT_TOKEN"); token != "" {
 			return &http.BasicAuth{Username: "x-token-auth", Password: token}
-		}
-	}
-
-	// SSH key fallback for git@ URLs
-	if strings.HasPrefix(urlLower, "git@") || strings.Contains(urlLower, "ssh://") {
-		if keyPEM := trySecret("SSH_KEY"); keyPEM != "" {
-			auth, err := gitssh.NewPublicKeys("git", []byte(keyPEM), "")
-			if err == nil {
-				sshSetHostKeyCallback(auth)
-				return auth
-			}
 		}
 	}
 
