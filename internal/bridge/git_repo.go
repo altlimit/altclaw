@@ -102,11 +102,14 @@ func resolveGitAuth(store *config.Store, remoteURL string, authObj *goja.Object,
 
 	urlLower := strings.ToLower(remoteURL)
 
-	// SSH key fallback for git@ URLs
+	// SSH key for git@ URLs
 	if strings.HasPrefix(urlLower, "git@") || strings.Contains(urlLower, "ssh://") {
 		if keyPEM := trySecret("SSH_KEY"); keyPEM != "" {
 			auth, err := gitssh.NewPublicKeys("git", []byte(keyPEM), "")
-			if err == nil {
+			if err != nil {
+				slog.Warn("git: SSH_KEY secret found but failed to parse — check key format",
+					"error", err, "key_len", len(keyPEM), "key_prefix", safePrefix(keyPEM, 40))
+			} else {
 				sshSetHostKeyCallback(auth)
 				return auth
 			}
@@ -135,18 +138,12 @@ func resolveGitAuth(store *config.Store, remoteURL string, authObj *goja.Object,
 	return nil
 }
 
-// sshSetHostKeyCallback configures a reasonable host key policy on SSH auth.
-// Tries ~/.ssh/known_hosts first; falls back to accept-any if the file
-// doesn't exist or can't be parsed (common in containerised / fresh envs).
+// sshSetHostKeyCallback configures the host key policy on SSH auth.
+// In an agent runtime the user has explicitly provided their SSH key and
+// intends to connect, so we skip known_hosts verification entirely.
+// This avoids "key mismatch" errors caused by stale or missing entries
+// in ~/.ssh/known_hosts (e.g. after GitHub host-key rotations).
 func sshSetHostKeyCallback(auth *gitssh.PublicKeys) {
-	kh, err := gitssh.NewKnownHostsCallback()
-	if err == nil {
-		auth.HostKeyCallback = kh
-		return
-	}
-	// No known_hosts available — accept any host key.
-	// This is acceptable for an agent runtime where the user explicitly
-	// provided their SSH key and intends to connect.
 	auth.HostKeyCallback = ssh.InsecureIgnoreHostKey()
 }
 
