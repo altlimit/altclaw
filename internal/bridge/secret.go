@@ -78,6 +78,17 @@ func RegisterSecret(vm *goja.Runtime, store *config.Store, workspace string, ctx
 		return vm.ToValue(err == nil)
 	})
 
+	// secret.get(name) — returns the {{secrets.NAME}} placeholder for safe usage.
+	// The actual value is never exposed to JS; bridges like git auth and fetch
+	// expand the placeholder at the Go level right before use.
+	secObj.Set("get", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 1 {
+			Throw(vm, "secret.get requires a name argument")
+		}
+		name := call.Arguments[0].String()
+		return vm.ToValue(fmt.Sprintf("{{secrets.%s}}", name))
+	})
+
 	// secret.set(name, value)
 	secObj.Set("set", func(call goja.FunctionCall) goja.Value {
 		if len(call.Arguments) < 2 {

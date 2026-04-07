@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 
 	"github.com/dop251/goja"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // RegisterCrypto adds a Node.js-like crypto namespace to the runtime.
@@ -35,7 +36,21 @@ func RegisterCrypto(vm *goja.Runtime) {
 			Throw(vm, "privateKeyEncoding option is required")
 		}
 
-		var privBlock, pubBlock *pem.Block
+		// Read format options
+		pubFormat := "pem"
+		privFormat := "pem"
+		if pubEncObj := pubEnc.ToObject(vm); pubEncObj != nil {
+			if f := pubEncObj.Get("format"); f != nil && !goja.IsUndefined(f) {
+				pubFormat = f.String()
+			}
+		}
+		if privEncObj := privEnc.ToObject(vm); privEncObj != nil {
+			if f := privEncObj.Get("format"); f != nil && !goja.IsUndefined(f) {
+				privFormat = f.String()
+			}
+		}
+
+		var pubKeyStr, privKeyStr string
 
 		if keyType == "rsa" {
 			modulusLength := 2048 // default
@@ -48,19 +63,8 @@ func RegisterCrypto(vm *goja.Runtime) {
 				Throwf(vm, "Failed to generate RSA key: %v", err)
 			}
 
-			// Private Key pkcs8
-			privBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
-			if err != nil {
-				Throwf(vm, "Failed to marshal RSA private key: %v", err)
-			}
-			privBlock = &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}
-
-			// Public Key spki
-			pubBytes, err := x509.MarshalPKIXPublicKey(&privKey.PublicKey)
-			if err != nil {
-				Throwf(vm, "Failed to marshal RSA public key: %v", err)
-			}
-			pubBlock = &pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes}
+			privKeyStr = marshalPrivateKey(vm, privKey, privFormat)
+			pubKeyStr = marshalPublicKey(vm, &privKey.PublicKey, pubFormat)
 
 		} else if keyType == "ed25519" {
 			pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
@@ -68,28 +72,66 @@ func RegisterCrypto(vm *goja.Runtime) {
 				Throwf(vm, "Failed to generate ed25519 key: %v", err)
 			}
 
-			privBytes, err := x509.MarshalPKCS8PrivateKey(privKey)
-			if err != nil {
-				Throwf(vm, "Failed to marshal ed25519 private key: %v", err)
-			}
-			privBlock = &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}
-
-			pubBytes, err := x509.MarshalPKIXPublicKey(pubKey)
-			if err != nil {
-				Throwf(vm, "Failed to marshal ed25519 public key: %v", err)
-			}
-			pubBlock = &pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes}
+			privKeyStr = marshalPrivateKey(vm, privKey, privFormat)
+			pubKeyStr = marshalPublicKey(vm, pubKey, pubFormat)
 
 		} else {
 			Throwf(vm, "Unsupported key type: %s", keyType)
 		}
 
 		res := vm.NewObject()
-		res.Set("publicKey", string(pem.EncodeToMemory(pubBlock)))
-		res.Set("privateKey", string(pem.EncodeToMemory(privBlock)))
+		res.Set("publicKey", pubKeyStr)
+		res.Set("privateKey", privKeyStr)
 
 		return res
 	})
 
 	vm.Set(NameCrypto, cryptoObj)
 }
+
+// marshalPrivateKey encodes a private key in the requested format.
+// "pem" → PKCS8 PEM, "openssh" → OpenSSH PEM (ssh-keygen compatible).
+func marshalPrivateKey(vm *goja.Runtime, key interface{}, format string) string {
+	switch format {
+	case "openssh":
+		// Marshal to OpenSSH format (-----BEGIN OPENSSH PRIVATE KEY-----)
+		// This is what ssh-keygen produces and what go-git expects.
+		block, err := gossh.MarshalPrivateKey(key, "")
+		if err != nil {
+			Throwf(vm, "Failed to marshal private key to OpenSSH format: %v", err)
+		}
+		return string(pem.EncodeToMemory(block))
+
+	default: // "pem"
+		privBytes, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			Throwf(vm, "Failed to marshal private key: %v", err)
+		}
+		block := &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}
+		return string(pem.EncodeToMemory(block))
+	}
+}
+
+// marshalPublicKey encodes a public key in the requested format.
+// "pem" → SPKI PEM, "openssh" → authorized_keys format (ssh-ed25519 AAAA...).
+func marshalPublicKey(vm *goja.Runtime, key interface{}, format string) string {
+	switch format {
+	case "openssh":
+		// Marshal to OpenSSH authorized_keys format (ssh-ed25519 AAAA...)
+		// This is the format GitHub/GitLab/etc expect for SSH deploy keys.
+		sshPub, err := gossh.NewPublicKey(key)
+		if err != nil {
+			Throwf(vm, "Failed to marshal public key to OpenSSH format: %v", err)
+		}
+		return string(gossh.MarshalAuthorizedKey(sshPub))
+
+	default: // "pem"
+		pubBytes, err := x509.MarshalPKIXPublicKey(key)
+		if err != nil {
+			Throwf(vm, "Failed to marshal public key: %v", err)
+		}
+		block := &pem.Block{Type: "PUBLIC KEY", Bytes: pubBytes}
+		return string(pem.EncodeToMemory(block))
+	}
+}
+

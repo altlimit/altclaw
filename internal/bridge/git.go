@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"altclaw.ai/internal/config"
 	"github.com/dop251/goja"
 	"github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -195,7 +197,7 @@ func snapshotAndCommit(repo *git.Repository, workspace, message string) (string,
 // RegisterGit adds the git namespace to the runtime.
 // The agent's history repo is a bare repo at configDir/wsID/.git.
 // All path operations are jailed to the workspace directory.
-func RegisterGit(vm *goja.Runtime, workspace, configDir string, wsID string) {
+func RegisterGit(vm *goja.Runtime, workspace, configDir string, wsID string, store *config.Store) {
 	g := vm.NewObject()
 
 	repoDir := filepath.Join(configDir, wsID, "git")
@@ -658,6 +660,141 @@ func RegisterGit(vm *goja.Runtime, workspace, configDir string, wsID string) {
 		storer.SetReference(ref)
 
 		return vm.ToValue(fmt.Sprintf("compacted: %d → %d commits", len(commits), n))
+	})
+
+	// ── Workspace .git management ─────────────────────────────────────
+
+	// git.init(path?, origin?) — initialize a new .git repo in the workspace
+	g.Set("init", func(call goja.FunctionCall) goja.Value {
+		targetDir := workspace
+		originURL := ""
+
+		if len(call.Arguments) >= 1 {
+			p := call.Arguments[0].String()
+			if p != "" {
+				abs, err := SanitizePath(workspace, p)
+				if err != nil {
+					logErr(vm, "git.init", err)
+				}
+				targetDir = abs
+			}
+		}
+		if len(call.Arguments) >= 2 {
+			originURL = call.Arguments[1].String()
+		}
+
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			logErr(vm, "git.init", err)
+		}
+
+		repo, err := git.PlainInit(targetDir, false)
+		if err != nil {
+			logErr(vm, "git.init", err)
+		}
+
+		if originURL != "" {
+			_, err := repo.CreateRemote(&gitconfig.RemoteConfig{
+				Name: "origin",
+				URLs: []string{originURL},
+			})
+			if err != nil {
+				logErr(vm, "git.init", err)
+			}
+		}
+
+		return buildRepoHandle(vm, repo, targetDir, store)
+	})
+
+	// git.clone(url, pathOrOpts?) — clone a remote repo into the workspace
+	g.Set("clone", func(call goja.FunctionCall) goja.Value {
+		if len(call.Arguments) < 1 {
+			Throw(vm, "git.clone requires a URL argument")
+		}
+		cloneURL := call.Arguments[0].String()
+
+		// Derive default target path from URL basename
+		urlBase := filepath.Base(cloneURL)
+		urlBase = strings.TrimSuffix(urlBase, ".git")
+		targetPath := urlBase
+		var cloneBranch string
+		var cloneDepth int
+		var authObj *goja.Object
+
+		if len(call.Arguments) >= 2 {
+			arg := call.Arguments[1]
+			// Check if it's a string shorthand or options object
+			if arg.ExportType() != nil && arg.ExportType().Kind().String() == "string" {
+				targetPath = arg.String()
+			} else {
+				optObj := arg.ToObject(vm)
+				if optObj != nil {
+					if p := optObj.Get("path"); p != nil && !goja.IsUndefined(p) {
+						targetPath = p.String()
+					}
+					if b := optObj.Get("branch"); b != nil && !goja.IsUndefined(b) {
+						cloneBranch = b.String()
+					}
+					if d := optObj.Get("depth"); d != nil && !goja.IsUndefined(d) {
+						cloneDepth = int(d.ToInteger())
+					}
+					if a := optObj.Get("auth"); a != nil && !goja.IsUndefined(a) {
+						authObj = a.ToObject(vm)
+					}
+				}
+			}
+		}
+
+		// Jail target to workspace
+		absTarget, err := SanitizePath(workspace, targetPath)
+		if err != nil {
+			logErr(vm, "git.clone", err)
+		}
+
+		cloneOpts := &git.CloneOptions{
+			URL: cloneURL,
+		}
+		if cloneBranch != "" {
+			cloneOpts.ReferenceName = plumbing.NewBranchReferenceName(cloneBranch)
+			cloneOpts.SingleBranch = true
+		}
+		if cloneDepth > 0 {
+			cloneOpts.Depth = cloneDepth
+		}
+
+		// Resolve auth
+		auth := resolveGitAuth(store, cloneURL, authObj, vm)
+		if auth != nil {
+			cloneOpts.Auth = auth
+		}
+
+		repo, err := git.PlainClone(absTarget, false, cloneOpts)
+		if err != nil {
+			logErr(vm, "git.clone", err)
+		}
+
+		return buildRepoHandle(vm, repo, absTarget, store)
+	})
+
+	// git.repo(path?) — open an existing .git repo in the workspace
+	g.Set("repo", func(call goja.FunctionCall) goja.Value {
+		targetDir := workspace
+		if len(call.Arguments) >= 1 {
+			p := call.Arguments[0].String()
+			if p != "" {
+				abs, err := SanitizePath(workspace, p)
+				if err != nil {
+					logErr(vm, "git.repo", err)
+				}
+				targetDir = abs
+			}
+		}
+
+		repo, err := git.PlainOpen(targetDir)
+		if err != nil {
+			Throwf(vm, "git.repo: no .git repository found at %q", targetDir)
+		}
+
+		return buildRepoHandle(vm, repo, targetDir, store)
 	})
 
 	vm.Set(NameGit, g)

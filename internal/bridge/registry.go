@@ -59,7 +59,7 @@ var Builtins = []BuiltinInfo{
 	{Name: NameDB, Description: "SQLite database per workspace: db.open, db.exec, db.query, db.close", ViaRequire: true},
 	{Name: NameBlob, Description: "Large binary object storage with streaming read/write support", ViaRequire: true},
 	{Name: NameGit, Description: "Git operations on the workspace repo: log, diff, restore, snapshot", ViaRequire: true},
-	{Name: NameSecret, Description: "Encrypted secret store: secret.set, secret.get, secret.delete", ViaRequire: false},
+	{Name: NameSecret, Description: "Encrypted secret store: secret.set, secret.get, secret.delete", ViaRequire: true},
 	{Name: NameCSV, Description: "CSV reader/writer: csv.read (streaming or buffered), csv.write, csv.append", ViaRequire: true},
 	{Name: NameMod, Description: "Module management: mod.search, mod.install, mod.remove, mod.info, mod.list", ViaRequire: true},
 	{Name: NameLog, Description: "Application logs: log.recent, log.search, log.info, log.warn, log.error, log.debug", ViaRequire: true},

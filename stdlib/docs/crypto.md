@@ -5,22 +5,28 @@ Access using `require('crypto')`. Currently provides secure, native key generati
 #### Methods
 
 * `generateKeyPairSync(type: 'rsa' | 'ed25519', options: object) → { publicKey: string, privateKey: string }`
-  Generates a new asymmetric key pair synchronously. The returned keys are formatted as PEM strings matching standard OpenSSH/PKCS8 formats.
+  Generates a new asymmetric key pair synchronously.
 
   **Supported Options:**
   - `modulusLength` (Number): Key size in bits (RSA only, e.g., 2048 or 4096).
-  - `publicKeyEncoding` (Object): `{ type: 'spki', format: 'pem' }`
-  - `privateKeyEncoding` (Object): `{ type: 'pkcs8', format: 'pem' }`
+  - `publicKeyEncoding` (Object): `{ type: 'spki', format: 'pem' | 'openssh' }`
+  - `privateKeyEncoding` (Object): `{ type: 'pkcs8', format: 'pem' | 'openssh' }`
 
-**Example:**
+  **Formats:**
+  - `'pem'` (default): PKCS8/SPKI PEM (-----BEGIN PRIVATE KEY----- / -----BEGIN PUBLIC KEY-----)
+  - `'openssh'`: SSH-native format. Private key as OpenSSH PEM (-----BEGIN OPENSSH PRIVATE KEY-----), public key as authorized_keys line (ssh-ed25519 AAAA...). Use this for git SSH auth and GitHub/GitLab deploy keys.
+
+**Example (SSH key for GitHub):**
 ```javascript
 const crypto = require('crypto');
 const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  publicKeyEncoding: { type: 'spki', format: 'openssh' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'openssh' }
 });
 
-fs.write(".agent/ssh/id_ed25519", privateKey);
-fs.write(".agent/ssh/id_ed25519.pub", publicKey);
-output("Keys saved successfully!");
+secret.set('SSH_KEY', privateKey);
+output({
+  publicKey: publicKey,
+  hint: "Add this public key to GitHub → Settings → SSH Keys"
+});
 ```

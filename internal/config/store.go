@@ -660,7 +660,7 @@ func (s *Store) BuildMemoryPrompt(ctx context.Context, workspace string) string 
 		sb.WriteString(strings.Join(recentLines, "\n"))
 	}
 	if olderCount > 0 {
-		sb.WriteString(fmt.Sprintf("\n\n(%d older entries — use mem.search(query) to recall)", olderCount))
+		sb.WriteString(fmt.Sprintf("\n\n(%d older entries not shown — if this task involves APIs, modules, or patterns you may have tried before, run mem.search(\"keyword\") first to recall past lessons before guessing.)", olderCount))
 	}
 
 	return sb.String()
