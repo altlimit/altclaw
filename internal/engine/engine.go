@@ -388,7 +388,7 @@ func New(ws *config.Workspace, exec executor.Executor, uiHandler bridge.UIHandle
 		}
 		return ""
 	})
-	bridge.RegisterCrypto(vm)
+	bridge.RegisterCrypto(vm, store, broadcastCtx)
 	if store != nil {
 		bridge.RegisterMem(vm, store, nsForDB, broadcastCtx)
 	}
