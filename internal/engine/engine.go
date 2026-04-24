@@ -227,6 +227,38 @@ func New(ws *config.Workspace, exec executor.Executor, uiHandler bridge.UIHandle
 			return []byte("module.exports = " + cleanPath + ";"), nil
 		}
 
+		// When goja_nodejs walks up directories from a file loaded via an absolute path
+		// (e.g. cron scripts, serverjs), it produces paths like:
+		//   /workspace/.agent/node_modules/kraken
+		// The node_modules/ prefix was stripped above (cleanPath = "kraken"), but the
+		// original path is still absolute. If we let it fall through to the IsAbs branch,
+		// it would try to os.ReadFile the non-existent node_modules directory instead of
+		// searching moduleDirs + stdlib. Redirect bare module names to the proper lookup.
+		if cleanPath != filepath.ToSlash(path) && !strings.HasPrefix(cleanPath, ".") && !strings.HasPrefix(cleanPath, "/") {
+			// Bare module name (no slashes) — search moduleDirs + stdlib
+			if !strings.Contains(cleanPath, "/") {
+				for _, baseDir := range eng.moduleDirs {
+					if data, ok := readModuleFile(baseDir, cleanPath); ok {
+						return data, nil
+					}
+				}
+				if src, ok := stdlib.Load(cleanPath); ok {
+					return []byte(src), nil
+				}
+				return nil, fmt.Errorf("module not found: %q", cleanPath)
+			}
+			// Module-relative path (e.g. kraken/helper.js) — search moduleDirs
+			for _, baseDir := range eng.moduleDirs {
+				if data, ok := readModuleFile(baseDir, cleanPath); ok {
+					return data, nil
+				}
+			}
+			if src, ok := stdlib.Load(cleanPath); ok {
+				return []byte(src), nil
+			}
+			return nil, fmt.Errorf("module not found: %q", cleanPath)
+		}
+
 		// 1. Host-absolute path (e.g. C:\workspace\test.js on Windows or /workspace/test.js on Linux)
 		// This happens when RunModule passes an absolute path so goja_nodejs recognizes it natively.
 		if filepath.IsAbs(path) {
