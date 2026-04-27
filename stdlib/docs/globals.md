@@ -43,6 +43,7 @@ Use `doc.read("name")` for the full API of any individual module.
 
 - **sys** — System commands: `sys.call(cmd, args)`, `sys.spawn(cmd, args)`, `sys.getOutput(pid)`, `sys.terminate(pid)`, `sys.setImage(img)`
 - **cron** — Scheduled tasks: `cron.add(schedule, code)`, `cron.rm(id)`, `cron.list()`
+- **conn** — Persistent connections: `conn.open(url, handler, {type, headers, reconnect})`, `conn.list()`, `conn.send(id, data)`, `conn.close(id)`. Types: ws, sse.
 - **agent** — Sub-agents: `agent.run(task)`, `agent.run(task, "provider")`, `agent.result(id)`
 - **task** — Parallel execution: `task.run(code)`, `task.join(id)`, `task.all(ids)`. Queue support: `task.run(fn, {queue: "name", limit: 3})`
 - **secret** — Credentials: `secret.list()`, `secret.exists(name)`, `secret.set(name, val)`, `secret.rm(name)`. Use `{{secrets.NAME}}` in fetch/sys/blob.

@@ -103,6 +103,18 @@ func (e *Engine) WithCronManager(mgr *cron.Manager, chatIDFn func() int64) *Engi
 	return e
 }
 
+// WithConnManager registers the conn bridge on the engine's VM.
+// The conn bridge provides conn.open/list/send/close for persistent
+// connections (WebSocket, future: TCP, MQTT). chatIDFn provides the
+// current chat ID for associating connections with conversations.
+func (e *Engine) WithConnManager(mgr bridge.ConnManager, chatIDFn func() int64) *Engine {
+	if mgr != nil {
+		bridge.RegisterConn(e.vm, mgr, e.ws.Path, chatIDFn, e.BroadcastCtx)
+	}
+	return e
+}
+
+
 // SetGlobal sets a named global variable on the VM.
 // Used by RunTask to register the __taskResult sentinel and disable output().
 func (e *Engine) SetGlobal(name string, value interface{}) {

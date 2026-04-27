@@ -24,6 +24,7 @@ import (
 	"altclaw.ai/internal/agent"
 	"altclaw.ai/internal/bridge"
 	"altclaw.ai/internal/config"
+	"altclaw.ai/internal/connmgr"
 	"altclaw.ai/internal/cron"
 	"altclaw.ai/internal/executor"
 	"altclaw.ai/internal/mcp"
@@ -163,6 +164,7 @@ type Server struct {
 	store    *config.Store
 	logBuf   *bridge.LogBuffer
 	cronMgr  *cron.Manager
+	connMgr  *connmgr.Manager
 	password string
 	sessions map[string]time.Time
 
@@ -183,7 +185,7 @@ type Server struct {
 }
 
 // NewServer creates a web server.
-func NewServer(ag *agent.Agent, store *config.Store, ws *config.Workspace, cronMgr *cron.Manager, logBuf *bridge.LogBuffer, newAgent func(providerName string) (*agent.Agent, error)) *Server {
+func NewServer(ag *agent.Agent, store *config.Store, ws *config.Workspace, cronMgr *cron.Manager, connMgr *connmgr.Manager, logBuf *bridge.LogBuffer, newAgent func(providerName string) (*agent.Agent, error)) *Server {
 	password := generatePassword()
 	s := &Server{
 		chats:           make(map[int64]*chatSession),
@@ -191,6 +193,7 @@ func NewServer(ag *agent.Agent, store *config.Store, ws *config.Workspace, cronM
 		store:           store,
 		logBuf:          logBuf,
 		cronMgr:         cronMgr,
+		connMgr:         connMgr,
 		password:        password,
 		sessions:        make(map[string]time.Time),
 		passkeySessions: make(map[string]*webauthn.SessionData),

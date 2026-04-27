@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+
+	"altclaw.ai/internal/connmgr"
 )
 
 // Stats returns lightweight workspace summary for the hub dashboard.
@@ -35,9 +37,18 @@ func (a *Api) Stats() any {
 	tokenUsageToday, _ := a.server.store.TodayTokenUsage(ctx, wsID)
 	tokenUsageHistory, _ := a.server.store.GetTokenUsage(ctx, wsID, 14)
 
+	// Count active connections
+	var connCount int
+	if a.server.connMgr != nil {
+		if list, ok := a.server.connMgr.List().([]connmgr.ConnInfo); ok {
+			connCount = len(list)
+		}
+	}
+
 	return map[string]any{
 		"chats":               chatCount,
 		"cron_jobs":           cronCount,
+		"connections":         connCount,
 		"active_chats":        activeChats,
 		"token_usage_today":   tokenUsageToday,
 		"token_usage_history": tokenUsageHistory,

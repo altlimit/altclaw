@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ChatPanel from '@/components/ChatPanel.vue'
+import ConnPanel from '@/components/ConnPanel.vue'
 import CronPanel from '@/components/CronPanel.vue'
 import LogPanel from '@/components/LogPanel.vue'
 import EditorTabs from '@/components/EditorTabs.vue'
@@ -15,6 +16,7 @@ import SecretPanel from '@/components/SecretPanel.vue'
 import SubAgentPanel from '@/components/SubAgentPanel.vue'
 import ProvidersPanel from '@/components/ProvidersPanel.vue'
 import ProviderConfigPage from '@/pages/ProviderConfigPage.vue'
+import ConnDetailPage from '@/pages/ConnDetailPage.vue'
 import ModuleDetailPage from '@/pages/ModuleDetailPage.vue'
 import SecurityPage from '@/pages/SecurityPage.vue'
 import SettingsPage from '@/pages/SettingsPage.vue'
@@ -83,7 +85,7 @@ const authStore = useAuthStore()
 const currentActivity = ref('chats')
 const agentMenuOpen = ref(false)
 const agentMenuRef = ref<HTMLElement | null>(null)
-const agentActivities = ['cron', 'modules', 'memory', 'secrets', 'git']
+const agentActivities = ['cron', 'connections', 'modules', 'memory', 'secrets', 'git']
 const providersPanelRef = ref<InstanceType<typeof ProvidersPanel> | null>(null)
 
 function toggleActivity(act: string) {
@@ -355,7 +357,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
-function openTab(type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents', label: string, id?: number) {
+function openTab(type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents' | 'connection', label: string, id?: number) {
   editorStore.openSpecialTab(type, label, id)
 }
 
@@ -437,6 +439,14 @@ function getLanguage(path: string | null) {
                 title="Cron Jobs"
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </button>
+              <button 
+                class="activity-btn sub" 
+                :class="{ active: currentActivity === 'connections' }"
+                @click="selectAgentTool('connections')"
+                title="Connections"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6m0 8v6"/><circle cx="12" cy="12" r="4"/><path d="M4.93 4.93l4.24 4.24"/><path d="M14.83 14.83l4.24 4.24"/><path d="M19.07 4.93l-4.24 4.24"/><path d="M9.17 14.83l-4.24 4.24"/></svg>
               </button>
               <button 
                 class="activity-btn sub" 
@@ -541,10 +551,11 @@ function getLanguage(path: string | null) {
     </nav>
 
     <!-- Primary Sidebar -->
-    <aside class="sidebar" v-show="currentActivity === 'workspace' || currentActivity === 'search' || currentActivity === 'chats' || currentActivity === 'cron' || currentActivity === 'modules' || currentActivity === 'memory' || currentActivity === 'secrets' || currentActivity === 'git' || currentActivity === 'providers'">
+    <aside class="sidebar" v-show="currentActivity === 'workspace' || currentActivity === 'search' || currentActivity === 'chats' || currentActivity === 'cron' || currentActivity === 'connections' || currentActivity === 'modules' || currentActivity === 'memory' || currentActivity === 'secrets' || currentActivity === 'git' || currentActivity === 'providers'">
       <WorkspacePage ref="workspaceRef" v-show="currentActivity === 'workspace'" />
       <SearchPanel v-show="currentActivity === 'search'" />
       <CronPanel v-if="currentActivity === 'cron'" />
+      <ConnPanel v-if="currentActivity === 'connections'" />
       <ModulesPanel v-if="currentActivity === 'modules'" />
       <MemoryPanel v-if="currentActivity === 'memory'" />
       <SecretPanel v-if="currentActivity === 'secrets'" />
@@ -673,6 +684,14 @@ function getLanguage(path: string | null) {
               :provider-id="parseInt(tab.path.replace('special://provider-', ''), 10)"
               @saved="providersPanelRef?.reload()"
               @deleted="() => { editorStore.closeFile(tab.path); providersPanelRef?.reload() }"
+            />
+          </div>
+        </template>
+        <!-- Connection detail tabs (one per open connection) -->
+        <template v-for="tab in editorStore.getTabs().filter(t => t.type === 'connection')" :key="tab.path">
+          <div v-if="editorStore.activeFilePath === tab.path" class="tab-pane boxed">
+            <ConnDetailPage
+              :conn-id="parseInt(tab.path.replace('special://connection-', ''), 10)"
             />
           </div>
         </template>

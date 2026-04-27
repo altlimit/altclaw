@@ -429,6 +429,25 @@ func (s *Store) ClearCronJobChatID(ctx context.Context, workspaceID string, chat
 	}
 }
 
+// ── ConnEntry CRUD ──────────────────────────────────────────────────
+
+// ListConnEntries returns all persistent connections for a workspace.
+func (s *Store) ListConnEntries(ctx context.Context, workspaceID string) ([]*ConnEntry, error) {
+	q := dsorm.NewQuery("ConnEntry").Namespace(workspaceID)
+	entries, _, err := dsorm.Query[*ConnEntry](ctx, s.Client, q, "")
+	return entries, err
+}
+
+// SaveConnEntry persists a connection entry.
+func (s *Store) SaveConnEntry(ctx context.Context, entry *ConnEntry) error {
+	return s.Client.Put(ctx, entry)
+}
+
+// DeleteConnEntry removes a connection entry.
+func (s *Store) DeleteConnEntry(ctx context.Context, entry *ConnEntry) error {
+	return s.Client.Delete(ctx, entry)
+}
+
 // ── Passkey CRUD ────────────────────────────────────────────────────
 
 // ListPasskeys returns all stored passkeys.

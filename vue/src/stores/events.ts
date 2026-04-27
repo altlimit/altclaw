@@ -65,7 +65,7 @@ export const useEventStore = defineStore('events', () => {
     }
     // Forward panel-update events to window so components using
     // window.addEventListener (e.g. ModulesPanel) receive them.
-    const windowTypes = ['module_updated', 'cron_updated', 'memory_updated']
+    const windowTypes = ['module_updated', 'cron_updated', 'conn_updated', 'memory_updated']
     if (windowTypes.includes(evt.type)) {
       window.dispatchEvent(new CustomEvent(evt.type, { detail: evt }))
     }

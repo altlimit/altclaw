@@ -82,6 +82,8 @@ func (a *Api) RunScript(w http.ResponseWriter, r *http.Request) {
 
 	// Register cron bridge so require("cron") works in run scripts
 	eng.WithCronManager(a.server.cronMgr, func() int64 { return 0 })
+	// Register conn bridge so require("conn") works in run scripts
+	eng.WithConnManager(a.server.connMgr, func() int64 { return 0 })
 
 	defer eng.Cleanup()
 

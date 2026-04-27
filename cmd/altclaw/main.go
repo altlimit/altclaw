@@ -19,6 +19,7 @@ import (
 	"altclaw.ai/internal/bridge"
 	"altclaw.ai/internal/buildinfo"
 	"altclaw.ai/internal/config"
+	"altclaw.ai/internal/connmgr"
 	"altclaw.ai/internal/cron"
 	"altclaw.ai/internal/engine"
 	"altclaw.ai/internal/executor"
@@ -225,11 +226,12 @@ func startMemoryExpiry(store *config.Store, wsID string) {
 
 // buildAgent creates an agent from the store (used by both TUI and web mode).
 // cronMgr is optional — if non-nil, the cron bridge is registered on the engine.
-func buildAgent(store *config.Store, ws *config.Workspace, providerName string, uiHandler bridge.UIHandler, exec executor.Executor, execType string, cronMgr *cron.Manager) (*agent.Agent, *engine.Engine, error) {
-	return buildAgentWithLogBuf(store, ws, providerName, uiHandler, exec, execType, cronMgr, logBuf)
+// connMgr is optional — if non-nil, the conn bridge is registered on the engine.
+func buildAgent(store *config.Store, ws *config.Workspace, providerName string, uiHandler bridge.UIHandler, exec executor.Executor, execType string, cronMgr *cron.Manager, connMgr *connmgr.Manager) (*agent.Agent, *engine.Engine, error) {
+	return buildAgentWithLogBuf(store, ws, providerName, uiHandler, exec, execType, cronMgr, connMgr, logBuf)
 }
 
-func buildAgentWithLogBuf(store *config.Store, ws *config.Workspace, providerName string, uiHandler bridge.UIHandler, exec executor.Executor, execType string, cronMgr *cron.Manager, lb *bridge.LogBuffer) (*agent.Agent, *engine.Engine, error) {
+func buildAgentWithLogBuf(store *config.Store, ws *config.Workspace, providerName string, uiHandler bridge.UIHandler, exec executor.Executor, execType string, cronMgr *cron.Manager, connMgr *connmgr.Manager, lb *bridge.LogBuffer) (*agent.Agent, *engine.Engine, error) {
 	appCfg := store.Config()
 	// Apply provider-level concurrency limit (0 = unlimited)
 	provider.SetConcurrency(appCfg.ProviderConcurrency)
@@ -354,6 +356,11 @@ func buildAgentWithLogBuf(store *config.Store, ws *config.Workspace, providerNam
 		return ag.ChatID
 	})
 
+	// Register conn bridge if a manager was provided
+	eng.WithConnManager(connMgr, func() int64 {
+		return ag.ChatID
+	})
+
 	return ag, eng, nil
 }
 
@@ -466,6 +473,8 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	var broadcastPanel func([]byte)
 
 	// Create a single cron manager for this workspace (never duplicated per chat session)
+	// connMgr is declared here (before cron factory) so cron scripts can use it.
+	var connMgr *connmgr.Manager
 	var cronMgr *cron.Manager
 	var cronErr error
 	cronMgr, cronErr = cron.New(store, ws.ID, func(jobID, chatID int64, instructions string, isScript bool) {
@@ -485,6 +494,7 @@ func startWeb(store *config.Store, workspace, addr string) error {
 				}, "", store, logBuf).WithModuleDirs(store.ModuleDirs(ws.ID))
 				scriptEng.SetProcess("cron", "", "", executorEnv(activeExecType, activeDockerImage))
 				scriptEng.WithCronManager(cronMgr, func() int64 { return activeChatID })
+				scriptEng.WithConnManager(connMgr, func() int64 { return activeChatID })
 				// Wire broadcast for bridge mutations in cron scripts
 				if broadcastPanel != nil {
 					scriptEng.OnBroadcast = broadcastPanel
@@ -538,6 +548,41 @@ func startWeb(store *config.Store, workspace, addr string) error {
 		cronMgr = nil
 	}
 
+	// Initialize connection manager for persistent WebSocket connections
+	connMgr, err = connmgr.New(store, ws.ID, func(handler string, sendFn func(string) error, closeFn func()) *engine.Engine {
+		scriptEng := engine.New(ws, exec, &headlessUI{
+			LogFunc: func(msg string) {
+				slog.Info("conn", "output", msg)
+				if cronBroadcast != nil {
+					cronBroadcast(0, "🔌 "+msg)
+				}
+			},
+		}, "", store, logBuf).WithModuleDirs(store.ModuleDirs(ws.ID))
+		scriptEng.SetProcess("conn", "", handler, executorEnv(activeExecType, activeDockerImage))
+		scriptEng.WithCronManager(cronMgr, func() int64 { return 0 })
+		// Wire broadcast for bridge mutations
+		if broadcastPanel != nil {
+			scriptEng.OnBroadcast = broadcastPanel
+		}
+		// Inject __connSend and __connClose Go functions into the warm VM
+		scriptEng.SetGlobal("__connSend", func(data string) {
+			if err := sendFn(data); err != nil {
+				slog.Error("conn: send error", "err", err)
+			}
+		})
+		scriptEng.SetGlobal("__connClose", func() { closeFn() })
+		scriptEng.SetGlobal("__connReady", true)
+		// Wire agent bridge if available
+		if ag != nil {
+			scriptEng.SetAgentRunner(ag)
+		}
+		return scriptEng
+	})
+	if err != nil {
+		slog.Warn("connmgr setup failed", "error", err)
+		connMgr = nil
+	}
+
 	// Expire old memory entries on startup and every 24 hours
 	startMemoryExpiry(store, ws.ID)
 
@@ -557,7 +602,7 @@ func startWeb(store *config.Store, workspace, addr string) error {
 		activeDockerImage = appCfg.DockerImage
 
 		initialHandler = &webUIHandler{}
-		ag, eng, err = buildAgent(store, ws, "", initialHandler, exec, resolvedExecType, cronMgr)
+		ag, eng, err = buildAgent(store, ws, "", initialHandler, exec, resolvedExecType, cronMgr, connMgr)
 		initialHandler.agFunc = func() *agent.Agent { return ag }
 		if err != nil {
 			exec.Cleanup()
@@ -579,7 +624,7 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	// Track current executor for cleanup
 	currentExec := exec
 
-	srv = web.NewServer(ag, store, ws, cronMgr, logBuf, func(providerName string) (*agent.Agent, error) {
+	srv = web.NewServer(ag, store, ws, cronMgr, connMgr, logBuf, func(providerName string) (*agent.Agent, error) {
 		if !store.IsConfigured() {
 			return nil, fmt.Errorf("no providers configured")
 		}
@@ -602,7 +647,7 @@ func startWeb(store *config.Store, workspace, addr string) error {
 		}
 
 		handler := &webUIHandler{}
-		newAg, newEng, err := buildAgent(store, ws, providerName, handler, currentExec, activeExecType, cronMgr)
+		newAg, newEng, err := buildAgent(store, ws, providerName, handler, currentExec, activeExecType, cronMgr, connMgr)
 		handler.agFunc = func() *agent.Agent { return newAg }
 		handler.server = srv
 		if err != nil {
@@ -679,8 +724,11 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	if flagVerbose {
 		slog.Info("starting web server", "addr", addr, "workspace", workspace)
 
-		// Graceful cleanup: executor + store + cron
+		// Graceful cleanup: executor + store + cron + connections
 		cleanup := func() {
+			if connMgr != nil {
+				connMgr.Stop()
+			}
 			if cronMgr != nil {
 				cronMgr.Stop()
 			}
@@ -735,6 +783,9 @@ func startWeb(store *config.Store, workspace, addr string) error {
 
 	// Graceful cleanup for non-verbose mode
 	cleanupOnce := sync.OnceFunc(func() {
+		if connMgr != nil {
+			connMgr.Stop()
+		}
 		if cronMgr != nil {
 			cronMgr.Stop()
 		}
@@ -861,7 +912,7 @@ func startTUI(store *config.Store, workspace string) error {
 	startMemoryExpiry(store, ws.ID)
 
 	var eng *engine.Engine
-	ag, eng, err = buildAgent(store, ws, initialProv, model, exec, resolvedExecType, cronMgr)
+	ag, eng, err = buildAgent(store, ws, initialProv, model, exec, resolvedExecType, cronMgr, nil)
 	if err != nil {
 		return err
 	}
@@ -881,7 +932,7 @@ func startTUI(store *config.Store, workspace string) error {
 
 	// Wire up provider switching — reuse the shared executor across rebuilds
 	model.RebuildAgent = func(providerName string) (*agent.Agent, error) {
-		newAg, newEng, err := buildAgent(store, ws, providerName, model, exec, resolvedExecType, cronMgr)
+		newAg, newEng, err := buildAgent(store, ws, providerName, model, exec, resolvedExecType, cronMgr, nil)
 		if err != nil {
 			return nil, err
 		}

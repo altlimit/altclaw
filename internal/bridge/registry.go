@@ -27,6 +27,7 @@ const (
 	NameSSH    = "ssh"
 	NameMail    = "mail"
 	NameChat    = "chat"
+	NameConn    = "conn"
 	NameBrowser = "browser"
 )
 
@@ -70,6 +71,7 @@ var Builtins = []BuiltinInfo{
 	{Name: NameSSH, Description: "Remote execution via SSH: ssh.connect → exec, upload, download", ViaRequire: true},
 	{Name: NameMail, Description: "Email via SMTP + IMAP: mail.send, mail.connect → list, read, download, flag, move", ViaRequire: true},
 	{Name: NameChat, Description: "Cross-conversation access: chat.list, chat.read", ViaRequire: true},
+	{Name: NameConn, Description: "Persistent connections: conn.open, conn.list, conn.send, conn.close (WebSocket, SSE, future: TCP, MQTT)", ViaRequire: true},
 	{Name: NameBrowser, Description: "Headless browser automation: browser.open → page.click, type, eval, screenshot, pdf", ViaRequire: true},
 }
 

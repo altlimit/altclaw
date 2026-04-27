@@ -7,7 +7,7 @@ export interface OpenFile {
   name: string
   content: string
   isDirty: boolean
-  type: 'file' | 'chat' | 'config' | 'security' | 'media' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'diff' | 'module' | 'csv' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents'
+  type: 'file' | 'chat' | 'config' | 'security' | 'media' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'diff' | 'module' | 'csv' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents' | 'connection'
 }
 
 const mediaExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'mp4', 'webm', 'ogg', 'mp3', 'wav', 'pdf']
@@ -68,7 +68,7 @@ export const useEditorStore = defineStore('editor', () => {
     debounceSaveTabs()
   }
 
-  const openSpecialTab = (type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents', name: string, id?: number) => {
+  const openSpecialTab = (type: 'chat' | 'config' | 'security' | 'ws-settings' | 'tunnel' | 'cron' | 'memory' | 'token-usage' | 'settings' | 'providers' | 'provider' | 'logs' | 'sub-agents' | 'connection', name: string, id?: number) => {
     const virtualPath = id ? `special://${type}-${id}` : `special://${type}`
     if (!findTab(virtualPath)) {
       tabs.value.push({

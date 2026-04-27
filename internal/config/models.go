@@ -293,6 +293,34 @@ func (j *CronJob) AfterDelete(ctx context.Context) error {
 	return nil
 }
 
+// ConnEntry is a persistent connection (WebSocket, future: TCP, MQTT), namespaced by workspace.
+type ConnEntry struct {
+	dsorm.Base
+	ID        int64     `model:"id" json:"id"`
+	Workspace string    `model:"ns" json:"ns"`
+	ChatID    int64     `datastore:"chat_id,omitempty" json:"chat_id,omitempty"`
+	Type      string    `datastore:"type,noindex,omitempty" json:"type,omitempty"`       // "ws", "tcp", etc.
+	URL       string    `datastore:"url,noindex,omitempty" json:"url,omitempty"`
+	Handler   string    `datastore:"handler,noindex,omitempty" json:"handler,omitempty"` // script filepath (require()-resolvable)
+	Headers   string    `datastore:"headers,noindex,omitempty" json:"headers,omitempty"` // JSON object
+	Reconnect bool      `datastore:"reconnect,noindex,omitempty" json:"reconnect,omitempty"`
+	CreatedAt time.Time `model:"created" datastore:"created,omitempty" json:"created"`
+}
+
+func (c *ConnEntry) AfterSave(ctx context.Context, old dsorm.Model) error {
+	action := "updated"
+	if old == nil || old.IsNew() {
+		action = "added"
+	}
+	broadcast(ctx, []byte(fmt.Sprintf(`{"type":"conn_updated","action":"%s","id":"%d"}`, action, c.ID)))
+	return nil
+}
+
+func (c *ConnEntry) AfterDelete(ctx context.Context) error {
+	broadcast(ctx, []byte(fmt.Sprintf(`{"type":"conn_updated","action":"deleted","id":"%d"}`, c.ID)))
+	return nil
+}
+
 // Memory is a single structured memory record.
 // Kind: "core" (permanent), "learned" (auto-expire ~30d), "note" (auto-expire ~7d).
 type Memory struct {
