@@ -82,6 +82,9 @@ type Engine struct {
 	taskStore    *config.Store
 	taskUI       bridge.UIHandler
 	taskSession  string // session ID inherited by child VMs for Docker routing
+
+	// agentRunner is stored so task.run() children can inherit it.
+	agentRunner bridge.SubAgentRunner
 }
 
 // WithModuleDirs adds module search directories to the engine.
@@ -540,6 +543,7 @@ func (e *Engine) ConsoleFormat(call goja.FunctionCall) string {
 // not per-block deadlines). ExecContext is still used by agent.result() for
 // detecting per-block timeouts.
 func (e *Engine) SetAgentRunner(runner bridge.SubAgentRunner) {
+	e.agentRunner = runner
 	bridge.RegisterAgent(e.vm, runner, e.StopContext, e)
 }
 

@@ -670,6 +670,10 @@ func startWeb(store *config.Store, workspace, addr string) error {
 	// Share the initial executor with the server for RunScript
 	srv.Exec = exec
 	srv.ExecType = activeExecType
+	// Share the agent runner so RunScript engines can call agent.run()/agent.result()
+	if ag != nil {
+		srv.AgentRunner = ag
+	}
 
 	// In GUI (Wails) mode, skip session auth for localhost requests.
 	// The webview is a trusted local context and should never be kicked out.

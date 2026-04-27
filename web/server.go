@@ -180,6 +180,10 @@ type Server struct {
 	Exec     executor.Executor
 	ExecType string // resolved type: "docker", "podman", "local", "none"
 
+	// AgentRunner is set from main.go so RunScript / conn engines can wire
+	// agent.run()/agent.result() without creating a new agent per invocation.
+	AgentRunner bridge.SubAgentRunner
+
 	// NewAgent rebuilds the agent when config changes
 	NewAgent func(providerName string) (*agent.Agent, error)
 }

@@ -84,6 +84,10 @@ func (a *Api) RunScript(w http.ResponseWriter, r *http.Request) {
 	eng.WithCronManager(a.server.cronMgr, func() int64 { return 0 })
 	// Register conn bridge so require("conn") works in run scripts
 	eng.WithConnManager(a.server.connMgr, func() int64 { return 0 })
+	// Register agent bridge so agent.run()/agent.result() works in run scripts
+	if a.server.AgentRunner != nil {
+		eng.SetAgentRunner(a.server.AgentRunner)
+	}
 
 	defer eng.Cleanup()
 

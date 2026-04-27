@@ -52,6 +52,10 @@ func (e *Engine) RunTask(ctx context.Context, code string, _ string) (string, er
 		}
 		return goja.Undefined()
 	})
+	// Inherit agent bridge from parent so agent.run()/agent.result() works in tasks
+	if e.agentRunner != nil {
+		child.SetAgentRunner(e.agentRunner)
+	}
 	child.SetGlobal("output", func(call goja.FunctionCall) goja.Value {
 		// In task context output() acts as ui.log — return value comes from `return`.
 		if e.taskUI != nil {
